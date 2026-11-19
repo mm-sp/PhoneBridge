@@ -208,6 +208,12 @@ class MainWindow(Adw.ApplicationWindow):
                                   button_label="Pair a device", revealed=True)
         self._banner.connect("button-clicked", lambda _b: self._open_pairing())
         content_toolbar.add_top_bar(self._banner)
+        # Shown whenever a phone currently has remote control of this PC; "Revoke now" ends it immediately.
+        self._control_banner = Adw.Banner(title="", button_label="Revoke now", revealed=False)
+        self._control_banner.add_css_class("error")
+        self._control_banner.connect("button-clicked", lambda _b: self._revoke_pc_control())
+        content_toolbar.add_top_bar(self._control_banner)
+        GLib.timeout_add_seconds(2, self._refresh_control_banner)
         self._toasts = Adw.ToastOverlay()
         self._toasts.set_child(self._stack)
         content_toolbar.set_content(self._toasts)
@@ -217,6 +223,28 @@ class MainWindow(Adw.ApplicationWindow):
         self._clip_bridge = ClipboardBridge(self, self._on_local_clipboard_changed, self._on_local_image_changed)
         self.connect("close-request", self._on_close)
         self._update_link_label()
+
+    # ---------------------------------------------------------------- PC control indicator
+
+    def _refresh_control_banner(self) -> bool:
+        import time
+
+        active = [d for d in pairing.PairedDevice.list_all() if d.pc_control_active()]
+        if active:
+            left = max(1, int((max(d.pc_control_until for d in active) - time.time()) // 60) + 1)
+            names = ", ".join(f"“{d.name}”" for d in active)
+            self._control_banner.set_title(f"{names} can control this PC — switches off in {left} min")
+        self._control_banner.set_revealed(bool(active))
+        return True
+
+    def _revoke_pc_control(self) -> None:
+        from ..security import permissions
+
+        for d in pairing.PairedDevice.list_all():
+            if d.allow_pc_control:
+                permissions.set_mode(d, "remote_control", permissions.DENY)
+        self._refresh_control_banner()
+        self.toast("Remote control revoked")
 
     # ---------------------------------------------------------------- navigation
 

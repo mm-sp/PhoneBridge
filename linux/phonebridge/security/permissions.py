@@ -69,7 +69,7 @@ def mode_of(device, feature: str) -> str:
 on_change: list = []
 
 
-def set_mode(device, feature: str, mode: str) -> None:
+def set_mode(device, feature: str, mode: str, duration: int | None = None) -> None:
     if feature not in FEATURES:
         raise ValueError(f"unknown feature {feature!r}")
     if mode not in MODES:
@@ -81,10 +81,11 @@ def set_mode(device, feature: str, mode: str) -> None:
             raise ValueError("remote control is either on or off")
         import time
 
-        from ..pairing import pc_control_ttl_seconds
+        from ..pairing import PC_CONTROL_MAX_SECONDS, pc_control_ttl_seconds
 
         on = mode == ALLOW
-        until = time.time() + pc_control_ttl_seconds() if on else None   # remote control always expires
+        seconds = min(duration if duration else pc_control_ttl_seconds(), PC_CONTROL_MAX_SECONDS)
+        until = time.time() + seconds if on else None   # remote control always expires, never beyond one hour
         updated = PairedDevice.update(device.fingerprint, allow_pc_control=on, pc_control_until=until)
         device.allow_pc_control, device.pc_control_until = on, until
     else:

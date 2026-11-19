@@ -561,3 +561,13 @@ Sections above describe the project **as audited**; this table records what was 
 * **Push to a remote** (ISSUE-01 second half) and **moving `release.key` offline** (S-12): outward-facing / your secrets. **Back up `android/keystore/` and `keystore.properties`** — they are untracked.
 * Installing the new release APK over an existing debug-signed install requires uninstalling first (Android signature rule), which drops the pairing. The debug build is unchanged, so your current workflow is not affected.
 * ISSUE-07 on-device check of portrait + TalkBack (see above), ISSUE-08 splitting the large files, ISSUE-12 R8 (can't be validated without on-device testing), ISSUE-10 per-session PC-side approval (product decision), ISSUE-14 auto-mirror setting, ISSUE-16/17 (need hardware / a crash-consistency test), `gradlew` wrapper, CI, packaging, independent crypto review, MMS/relay/AP real-world validation, rotation sync.
+
+## Appendix C - Second remediation round (2026-11-19)
+
+| Item | Result | Verification |
+|---|---|---|
+| ISSUE-10 / S-2 PC control without approval on the PC | **Fixed.** A phone can never enable it. A request while off raises a prompt on the PC (Deny / 15 min / 1 hour, default Deny, 60 s timeout = refused); hard 1-hour ceiling (`PC_CONTROL_MAX_SECONDS`, env var can only lower it); red banner naming the phone with minutes left and **Revoke now**; revoke closes a running shell immediately, expiry within ~5 s; refusal/revoke gives a 2-minute cooldown (no prompt spam); audit-ledger records `pc_control.requested/approved/refused/revoked/expired`. | `test_pc_control` 27/27 (grant, clamp, refusal, cooldown, revoke closes shell in < 3 s), `test_pc_control_ui` 10/10. **Not covered:** the real Adw dialog in `app.py` (needs the full app) and the audit records are not asserted by a test |
+| Clipboard.kt `StaticFieldLeak` | **Investigated, not a leak.** The static `overlay` view uses the application context and is always cleared by `remove()` (focus or 800 ms fallback). Documented and suppressed. | lint: 39 -> 38 warnings. No Android unit-test infrastructure exists, so no automated test was added |
+| R8 smoke test | **Checklist written, not performed** (`docs/DEVICE_SMOKE_TEST.md`) | NOT TESTED |
+| Signing backup | Unchanged. **Only one encrypted off-machine backup exists (the Mi A3).** `~/phonebridge-backup-passphrase.txt` still exists on the PC and must not be deleted until the passphrase is stored and verified elsewhere | |
+| Repository recheck | working tree, all history, author metadata, personal paths, secrets, signing files, `.gitignore`, CI re-scanned - see `docs/GITHUB_PUBLICATION_CHECKLIST.md` | |

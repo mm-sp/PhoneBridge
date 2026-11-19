@@ -51,7 +51,7 @@ async def main_async() -> int:
 
     server = transport.ControlChannelServer(port=PORT)
     await server.start()
-    PcControl(server, asyncio.get_running_loop(), clipboard_text=lambda: "")
+    pc = PcControl(server, asyncio.get_running_loop(), clipboard_text=lambda: "")
     serve = asyncio.ensure_future(server.serve_forever())
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -167,6 +167,93 @@ async def main_async() -> int:
     except asyncio.TimeoutError:
         pass
     check("idle shell was closed within ~5 s of the deadline, with no further message from the phone", ended)
+
+    print("8. a phone cannot enable PC control by itself: only the answer on the PC does")
+    from phonebridge.security import permissions as P
+
+    async def next_status(timeout=10):
+        while True:
+            env = await asyncio.wait_for(recv(), timeout)
+            if env.type == "pc.status":
+                return env
+
+    async def drain():
+        try:
+            while True:
+                await asyncio.wait_for(recv(), 0.5)
+        except asyncio.TimeoutError:
+            pass
+
+    await drain()
+    phone.allow_pc_control, phone.pc_control_until = False, None
+    phone.save()
+    pc._gate_cache.clear()
+    pc._approval_cooldown.clear()
+    check("no approval callback: request stays refused, nothing is enabled",
+          (await ask("pc.info_request")).payload.get("denied") is True and not pairing.PairedDevice.load("cafe").pc_control_active())
+
+    prompts = []
+
+    async def grant(minutes):
+        async def cb(device):
+            prompts.append(device.name)
+            return minutes
+        return cb
+
+    pc.approval_callback = await grant(15)
+    first = await ask("pc.info_request")
+    check("while a prompt is open the phone is told to wait", first.payload.get("denied") is True and "approval" in first.payload["message"].lower())
+    done = await next_status()
+    check("approval on the PC enables control", done.payload.get("ok") is True and prompts == ["Test Phone"])
+    left = pairing.PairedDevice.load("cafe").pc_control_until - time.time()
+    check("granted for the chosen 15 minutes", 14 * 60 < left <= 15 * 60 + 5)
+    check("requests now work", (await ask("pc.info_request")).type == "pc.info")
+
+    P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.DENY)
+    check("revoking is immediate (very next message refused)", (await ask("pc.info_request")).payload.get("denied") is True)
+    await drain()
+    check("a revoked phone cannot raise a new prompt straight away", prompts == ["Test Phone"] and not pairing.PairedDevice.load("cafe").pc_control_active())
+
+    pc._approval_cooldown.clear()
+    pc.approval_callback = await grant(9999)
+    await ask("pc.info_request")
+    await next_status()
+    left = pairing.PairedDevice.load("cafe").pc_control_until - time.time()
+    check("an absurd request is clamped to one hour", left <= 3600 + 5)
+    P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.DENY)
+    await drain()
+
+    prompts.clear()
+    pc._approval_cooldown.clear()
+    pc.approval_callback = await grant(0)
+    await ask("pc.info_request")
+    refused = await next_status()
+    check("refusal is reported and nothing is enabled", refused.payload.get("denied") is True and not pairing.PairedDevice.load("cafe").pc_control_active())
+    await ask("pc.info_request")
+    await drain()
+    check("after a refusal the phone cannot spam prompts (cooldown)", prompts == ["Test Phone"])
+
+    print("9. revoking closes a running shell immediately")
+    pc._approval_cooldown.clear()
+    P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.ALLOW)
+    pc._gate_cache.clear()
+    await drain()
+    seq[0] += 1
+    writer.write(crypto.pack_frame(cipher.encrypt(Envelope("control", "pc.term_open", seq[0], {"cols": 80, "rows": 24, "new": True}).to_json())))
+    await writer.drain()
+    await asyncio.sleep(0.5)
+    t0 = time.time()
+    P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.DENY)
+    ended = False
+    try:
+        while time.time() - t0 < 3:
+            env = await asyncio.wait_for(recv(), 3)
+            if env.type == "pc.term_exit":
+                ended = True
+                break
+    except asyncio.TimeoutError:
+        pass
+    check("shell closed within 3 s of revoking (not waiting for the 5 s sweep)", ended)
 
     writer.close()
     serve.cancel()

@@ -9,7 +9,7 @@
   (`docs/SCREEN_SYNC.md`). Screen-rotation sync is **not** implemented.
 
 ### Changed
-- **"Allow PC control" now expires** (default 1 hour, `PHONEBRIDGE_PC_CONTROL_MINUTES`). Existing "on" settings count as off until you tick the box again; the Device card shows the minutes left. A running shell or screen view is closed when the time runs out.
+- **Phone-to-PC control needs approval on the PC and is limited to one hour.** A phone that asks while control is off raises a prompt on the PC (Deny / Allow 15 minutes / Allow 1 hour); a red banner shows who has control and offers "Revoke now"; revoking closes running shells immediately and expiry within seconds. `PHONEBRIDGE_PC_CONTROL_MINUTES` can only lower the default. Existing "on" settings count as off until you tick the box again.
 - **Android works in portrait.** The main screen follows the phone's rotation: landscape keeps the tab column on the left, portrait puts the tabs in a scrollable strip along the bottom and shows the status bar. Rotating does not restart the open tab.
 - **Accessibility (TalkBack):** tabs announce "selected", the header is a heading and the connection chip is announced when it changes, screen/app images and symbol keys (arrows, ⌫, ⏎, Shift…) have spoken names, the on-screen and terminal keys can be activated by double-tap, buttons are at least 48 dp tall and tabs grow with large font sizes.
 - Release APK is signed from `android/keystore.properties` (falls back to the debug key with a warning).

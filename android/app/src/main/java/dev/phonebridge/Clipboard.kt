@@ -1,6 +1,7 @@
 package dev.phonebridge
 
 import android.app.Activity
+import android.annotation.SuppressLint
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Handler
@@ -101,6 +102,10 @@ object Clipboard {
         if (android.os.Build.VERSION.SDK_INT < 29) sendIfNew(ctx)
     }
 
+    // Lint (StaticFieldLeak) flags this static View. Not a leak: the view is built from the *application* context
+    // (showReader receives ctx.applicationContext), it exists only while the 1x1 reader window is attached, and it is
+    // always cleared by remove() - on focus, or by the 800 ms fallback timer in showReader.
+    @SuppressLint("StaticFieldLeak")
     private var overlay: View? = null
 
     /**

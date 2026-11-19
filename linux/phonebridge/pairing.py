@@ -24,13 +24,16 @@ MAX_FAILED_ATTEMPTS = 3
 DEVICES_DIR = Path.home() / ".config" / "phonebridge" / "devices"
 
 
+PC_CONTROL_MAX_SECONDS = 3600   # hard ceiling: no setting, message or environment variable can authorise longer
+
+
 def pc_control_ttl_seconds() -> int:
-    """How long "Allow PC control" lasts once switched on: PHONEBRIDGE_PC_CONTROL_MINUTES (default 60, 1..1440)."""
+    """How long "Allow PC control" lasts once switched on: PHONEBRIDGE_PC_CONTROL_MINUTES (default 60, 1..60)."""
     try:
         minutes = int(os.environ.get("PHONEBRIDGE_PC_CONTROL_MINUTES", "60"))
     except ValueError:
         minutes = 60
-    return max(1, min(1440, minutes)) * 60
+    return max(1, min(PC_CONTROL_MAX_SECONDS // 60, minutes)) * 60
 
 PLATFORMS = ("android", "ios")
 IDENTITY_GRACE_SECONDS = 7 * 24 * 3600   # how long a retired phone identity key keeps working after a rotation

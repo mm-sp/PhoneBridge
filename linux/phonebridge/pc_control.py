@@ -17,6 +17,7 @@ from .netutil import spawn
 from . import file_transfer, pc_info
 from .pc_remote import BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, KEYSYMS, RemoteDesktop, ScreenStreamer
 from . import pairing
+from .security import ledger as sec_ledger, permissions
 from .pairing import PairedDevice
 from .terminal import TerminalSession
 from .transport import ControlChannelServer, DeviceConnection
@@ -39,6 +40,12 @@ class PcControl:
         self._needs_reask = False
         self._terms: dict[str, TerminalSession] = {}  # one shell per phone
         self._gate_cache: dict[str, tuple[tuple[int, int], float | None]] = {}
+        # PC-side approval: an async callable (device) -> minutes granted (0 = refused). The GUI shows the prompt.
+        # Without one (tests, headless) a phone's request simply stays refused.
+        self.approval_callback = None
+        self._approval_pending: set[str] = set()
+        self._approval_cooldown: dict[str, float] = {}   # fingerprint -> time before which no new prompt is raised
+        permissions.on_change.append(self._on_permission_change)
 
         for type_, handler in {
             "pc.info_request": self._on_info,
@@ -81,6 +88,60 @@ class PcControl:
         self._gate_cache[fingerprint] = (stamp, until)
         return until is not None and time.time() < until
 
+    # ------------------------------------------------------------- approval on the PC
+
+    APPROVAL_TIMEOUT = 60       # an unanswered prompt counts as "refused"
+    APPROVAL_COOLDOWN = 120     # after a refusal/timeout the same phone cannot raise another prompt for this long
+
+    def _maybe_request_approval(self, conn: DeviceConnection) -> bool:
+        """A phone asked for something while PC control is off: raise ONE prompt on the PC (if a GUI is attached).
+        The phone can never switch control on itself; only the answer given on the PC does."""
+        fp = conn.fingerprint
+        if self.approval_callback is None or fp in self._approval_pending:
+            return fp in self._approval_pending
+        if time.monotonic() < self._approval_cooldown.get(fp, 0.0):
+            return False
+        self._approval_pending.add(fp)
+        self._server.audit(sec_ledger.PERMISSION, fp, feature="remote_control", action="pc_control.requested")
+        spawn(self._run_approval(conn))
+        return True
+
+    async def _run_approval(self, conn: DeviceConnection) -> None:
+        fp = conn.fingerprint
+        minutes = 0
+        try:
+            device = PairedDevice.load(fp)
+            if device is not None:
+                minutes = int(await asyncio.wait_for(self.approval_callback(device), self.APPROVAL_TIMEOUT) or 0)
+        except Exception:  # noqa: BLE001 - timeout, dialog failure, bad answer: all mean "refused"
+            minutes = 0
+        finally:
+            self._approval_pending.discard(fp)
+        minutes = max(0, min(minutes, pairing.PC_CONTROL_MAX_SECONDS // 60))
+        device = PairedDevice.load(fp)
+        if minutes and device is not None:
+            permissions.set_mode(device, "remote_control", permissions.ALLOW, duration=minutes * 60)
+            self._gate_cache.pop(fp, None)
+            self._server.audit(sec_ledger.PERMISSION, fp, feature="remote_control", action="pc_control.approved", minutes=minutes)
+            message = {"message": f"PC control approved on the PC for {minutes} min", "ok": True}
+        else:
+            self._approval_cooldown[fp] = time.monotonic() + self.APPROVAL_COOLDOWN
+            self._server.audit(sec_ledger.PERMISSION, fp, feature="remote_control", action="pc_control.refused")
+            message = {"denied": True, "message": "PC control was not approved on the PC"}
+        try:
+            await conn.send("control", "pc.status", message)
+        except Exception:  # noqa: BLE001 - the phone may have gone away
+            pass
+
+    def _on_permission_change(self, device, feature: str, mode: str) -> None:
+        """Turning remote control off (Device page, Security page, the banner's Revoke) ends live sessions at once."""
+        if feature == "remote_control" and mode == permissions.DENY:
+            self._gate_cache.pop(device.fingerprint, None)
+            # The owner just switched it off: the phone may not immediately raise a new prompt.
+            self._approval_cooldown[device.fingerprint] = time.monotonic() + self.APPROVAL_COOLDOWN
+            self._server.audit(sec_ledger.PERMISSION, device.fingerprint, feature="remote_control", action="pc_control.revoked")
+            self._loop.call_soon_threadsafe(self._revoke_live_sessions, device.fingerprint)
+
     def _revoke_live_sessions(self, fingerprint: str) -> None:
         """Control was switched off or timed out: end the shell now (its output would otherwise keep flowing to the
         phone with no further gated message) and the screen view."""
@@ -92,8 +153,18 @@ class PcControl:
             GLib.idle_add(self._stop_screen)
 
     def _sweep_expired(self) -> None:
-        """Every few seconds: close shells/screen of phones whose permission ran out while idle."""
-        for fp in list(self._terms) + ([self._stream_conn.fingerprint] if self._stream_conn else []):
+        """Every few seconds: (1) any phone whose time limit ran out gets its switch cleared and an `expired` audit record,
+        (2) shells/screen views of phones that are no longer allowed are closed, even if the phone is silent."""
+        try:
+            for d in PairedDevice.list_all():
+                if d.allow_pc_control and not d.pc_control_active():
+                    PairedDevice.update(d.fingerprint, allow_pc_control=False, pc_control_until=None)
+                    self._gate_cache.pop(d.fingerprint, None)
+                    self._server.audit(sec_ledger.PERMISSION, d.fingerprint, feature="remote_control", action="pc_control.expired")
+        except Exception:  # noqa: BLE001 - housekeeping must never stop the sweep
+            log.exception("expiry sweep failed")
+        live = list(self._terms) + ([self._stream_conn.fingerprint] if self._stream_conn else [])
+        for fp in live:
             if not self._pc_control_allowed(fp):
                 self._revoke_live_sessions(fp)
         self._loop.call_later(5.0, self._sweep_expired)
@@ -105,8 +176,12 @@ class PcControl:
         async def wrapper(conn: DeviceConnection, env) -> None:
             if not self._pc_control_allowed(conn.fingerprint):
                 self._revoke_live_sessions(conn.fingerprint)
-                await conn.send("control", "pc.status", {"denied": True, "message": "PC control is turned off for this "
-                                                         "phone. On the PC: Device page → Allow PC control."})
+                asking = self._maybe_request_approval(conn)
+                await conn.send("control", "pc.status", {
+                    "denied": True,
+                    "message": ("PC control needs approval. Waiting for the PC's owner to approve on the PC…" if asking else
+                                "PC control is turned off for this phone. It can only be enabled on the PC "
+                                "(Device page → Allow PC control, or approve the prompt a request raises).")})
                 return
             await handler(conn, env)
 

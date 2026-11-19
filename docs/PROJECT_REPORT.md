@@ -3,7 +3,7 @@
 Version 1.4.0 (Android `versionCode` 14). Report date 2026-11-19. Statuses come from reading the source and from commands run during this audit; where something was not run it says **NOT TESTED**. Details of the earlier full audit are in `docs/AUDIT_REPORT.md`.
 
 ## 1. Executive summary
-PhoneBridge links one Android phone to one Linux PC without any account or cloud: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and the reverse direction (phone controls the PC). Roughly 12.8k lines of Python (PC) and 7.9k lines of Kotlin (Android). The PC side has 792 automated checks that all pass in this audit. The Android side has no in-framework tests; it is covered by five JVM harnesses, lint and one hardware device (Xiaomi Mi A3). The project is suitable for direct-APK/GitHub distribution after a device smoke test of the R8 build; it is **not** ready for Google Play (section 33).
+PhoneBridge links one Android phone to one Linux PC without any account or cloud: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and the reverse direction (phone controls the PC). Roughly 12.8k lines of Python (PC) and 7.9k lines of Kotlin (Android). The PC side has 813 automated checks that all pass in this audit. The Android side has no in-framework tests; it is covered by five JVM harnesses, lint and one hardware device (Xiaomi Mi A3). The project is suitable for direct-APK/GitHub distribution after a device smoke test of the R8 build; it is **not** ready for Google Play (section 33).
 
 ## 2. Introduction
 A "Phone Link for Linux": all trust is local (pairing records on each device), all traffic is end-to-end encrypted and goes directly between the two devices (LAN, Bluetooth for pairing, USB tunnel) or through an optional relay you host.
@@ -37,7 +37,7 @@ A technically capable individual with an Android phone (Android 8+) and a GTK/Wa
 | Per-app streaming | Experimental | `ui/apps_page.py`; `Video.kt` | many apps blank/refuse |
 | Screen sync / smart display-off | Partially | `screensync/*`; `SyncCore.kt`, `ScreenSync.kt`, `DisplayPower.kt` | rotation sync not implemented; some paths not hardware-verified |
 | Webcam (v4l2loopback) | Partially | `ui/webcam_page.py`; `Video.kt` | needs kernel module; no automated test of the sink |
-| Phone->PC control (shell, files, input, screen, Docker, apps) | Implemented, time-limited | `pc_control.py`, `terminal.py`, `pc_remote.py`; `PcPanels.kt` | default off, auto-expires |
+| Phone->PC control (shell, files, input, screen, Docker, apps) | Implemented; approval on the PC, max 1 h | `pc_control.py`, `terminal.py`, `pc_remote.py`, `app.py` (prompt), `ui/main_window.py` (banner); `PcPanels.kt` | default off; phone requests raise a PC prompt; banner + Revoke now; audit-logged. The prompt dialog itself is not covered by an automated test |
 | Security dashboards, signed ledger, permission manager | Implemented | `security/*`, `ui/security_page.py`; `SecurityPanel.kt`, `PcAccess.kt` | |
 | Signed-update verification | Partially | `updates.py`, `tools/sign_release.py` | verify only, no update server |
 | Portrait + TalkBack on Android | Implemented in code | `MainActivity.kt`, `InAppKeyboard.kt` | **NOT TESTED on a device** |
@@ -63,13 +63,13 @@ PC: Python >= 3.10, PyGObject >= 3.46 (GTK4/libadwaita), `cryptography` >= 46, `
 Android requests SMS, call log, contacts, phone, storage (legacy), camera, Bluetooth/BLE, location (SSID only), overlay, battery-optimisation exemption, boot, plus Accessibility and Notification-listener services. Security model, tests and limits: `docs/SECURITY.md`. Key properties: TLS 1.3 only, pinned cert, Ed25519-signed ephemeral handshake, AES-256-GCM with replay window, peer-network policy, auth throttling, signed hash-chained audit ledger, PC-control time limit.
 
 ## 24. Signing and release architecture
-Application ID `dev.phonebridge`. Release certificate SHA-256 `10:EE:C5:7A:52:F5:C2:01:CF:C6:71:49:6B:78:7D:48:49:9C:D8:DB:14:A2:12:2D:D6:32:2B:4E:62:DA:9B:F9` (RSA 4096). Keystore lives outside the repo (`docs/SIGNING.md`); one encrypted backup exists on a phone, a second is still required. Release builds use R8 shrinking + obfuscation; Play-Store signing differs from direct-APK signing (`docs/SIGNING.md`).
+Application ID `dev.phonebridge`. Release certificate SHA-256 `10:EE:C5:7A:52:F5:C2:01:CF:C6:71:49:6B:78:7D:48:49:9C:D8:DB:14:A2:12:2D:D6:32:2B:4E:62:DA:9B:F9` (RSA 4096). Keystore lives outside the repo (`docs/SIGNING.md`); one encrypted backup exists on a phone, a second is still required. Release builds use R8 shrinking + obfuscation (a real-device smoke test is still outstanding: `docs/DEVICE_SMOKE_TEST.md`); Play-Store signing differs from direct-APK signing (`docs/SIGNING.md`).
 
 ## 25. Testing - actual results (this audit, 2026-11-19)
 | Check | Result |
 |---|---|
-| PC test suite (`tools/run_tests.sh`, strict, scratch HOME) | **PASS** - 792 checks, 0 failed, 0 skipped (includes Kotlin harnesses audit 43, interop 18, sync 9, MMS 12) |
-| Android lint (debug + release) | **PASS with warnings** - 0 errors, 39 warnings (22 `SetTextI18n`, 4 `CommitPrefEdits` = false positives, 2 `StaticFieldLeak`, 1 `CustomX509TrustManager` = intentional pinning, others minor) |
+| PC test suite (`tools/run_tests.sh`, strict, scratch HOME) | **PASS** - 813 checks, 0 failed, 0 skipped (includes Kotlin harnesses audit 43, interop 18, sync 9, MMS 12; PC-control approval 27, PC-control UI 10) |
+| Android lint (debug + release) | **PASS with warnings** - 0 errors, 38 warnings (22 `SetTextI18n`, 4 `CommitPrefEdits` = false positives, 1 `CustomX509TrustManager` = intentional pinning, others minor). The `Clipboard.kt` `StaticFieldLeak` warning was investigated: not a real leak (application-context view, always cleared); suppressed with a comment |
 | Debug + release APK, AAB build | **PASS** |
 | `apksigner` on release APK | **PASS**, certificate SHA-256 as above, v2 scheme |
 | AAB certificate | **PASS**, same fingerprint |
@@ -88,7 +88,7 @@ Measured figures in `docs/SECURITY.md` ("Measured cost") are from the author's e
 Android: minSdk 26 (8.0); Android 8-9 cannot speak TLS 1.3 and are refused unless `PHONEBRIDGE_ALLOW_TLS12=1`. The APK contains no native libraries (ABI-independent). Verified on one device (Mi A3, Android 17). Linux: GTK 4 + libadwaita desktops; tested only on Ubuntu 24.04.4 LTS (kernel 6.8). Other distributions: **NOT TESTED**.
 
 ## 28-29. Known issues and limitations
-See `docs/AUDIT_REPORT.md` section 15 and its remediation appendix. Open items: Play Store blockers (`docs/PLAY_STORE.md`), targetSdk 29, `BootReceiver` exported, `StaticFieldLeak` overlay in `Clipboard.kt:15,104` (low), 22 hard-coded UI strings, no Android automated tests, screen-rotation sync missing, MMS/relay/Wi-Fi-join unproven in the real world, no independent security review, single signing-key backup.
+See `docs/AUDIT_REPORT.md` section 15 and its remediation appendix. Open items: Play Store blockers (`docs/PLAY_STORE.md`), targetSdk 29, `BootReceiver` exported, 22 hard-coded UI strings, no Android automated tests, screen-rotation sync missing, MMS/relay/Wi-Fi-join unproven in the real world, no independent security review, single signing-key backup.
 
 ## 30. Roadmap
 Smoke-test and ship the R8 build; second keystore backup; Android unit tests and CI; targetSdk 36 migration with scoped storage (prerequisite for Play); reduced-permission Play flavor (no SMS/call log); rotation sync; packaging (.deb/Flatpak); independent crypto review.

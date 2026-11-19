@@ -48,6 +48,7 @@ class PhoneBridgeApp(Adw.Application):
         self._wire_server_events(win)
         # The phone app's "control this PC" tabs (mouse, keyboard, screen, files, ports…).
         self.pc_control = PcControl(self.server, self.net_thread.loop, clipboard_text=win.current_clipboard_text)
+        self.pc_control.approval_callback = self._ask_pc_control
 
         show_page = Gio.SimpleAction.new("show-page", GLib.VariantType.new("s"))
         show_page.connect("activate", lambda _a, key: win.show_page_from_notification(key.get_string()))
@@ -130,6 +131,34 @@ class PhoneBridgeApp(Adw.Application):
             dialog.set_response_appearance("allow", Adw.ResponseAppearance.SUGGESTED)
             dialog.connect("response", lambda _d, r: loop.call_soon_threadsafe(
                 lambda: fut.done() or fut.set_result(r == "allow")))
+            dialog.present()
+            return False
+
+        GLib.idle_add(show)
+        return await fut
+
+    async def _ask_pc_control(self, device) -> int:
+        """A phone asked for PC control while it is off: ask the person at the PC. Returns minutes granted (0 = refused).
+        Never longer than one hour; the dialog defaults to Deny."""
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+
+        def show() -> bool:
+            dialog = Adw.MessageDialog(
+                transient_for=self.get_active_window(), heading="Allow this phone to control your PC?",
+                body=f"“{device.name}” is asking for remote control of this PC: a shell, your files, mouse and keyboard, "
+                     "and a view of the screen.\n\nOnly allow it if you just asked for this. Control switches itself off "
+                     "after the time you choose and can be revoked at any moment from the banner at the top of the window.")
+            dialog.add_response("deny", "Deny")
+            dialog.add_response("15", "Allow 15 minutes")
+            dialog.add_response("60", "Allow 1 hour")
+            dialog.set_default_response("deny")
+            dialog.set_close_response("deny")
+            dialog.set_response_appearance("60", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.connect("response", lambda _d, r: loop.call_soon_threadsafe(
+                lambda: fut.done() or fut.set_result(int(r) if r in ("15", "60") else 0)))
             dialog.present()
             return False
 

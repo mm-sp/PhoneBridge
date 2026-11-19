@@ -1,6 +1,6 @@
 # PhoneBridge
 
-An account-free, cloud-free bridge between an **Android phone** and a **Linux desktop**: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and (opt-in) controlling the PC from the phone. Everything travels directly between your two devices, end-to-end encrypted.
+Securely connect and control your Android phone and Linux PC with wireless and USB connectivity. An account-free, cloud-free bridge between an **Android phone** and a **Linux desktop**: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and (opt-in) controlling the PC from the phone. Everything travels directly between your two devices, end-to-end encrypted.
 
 > **Status: 1.4.0, pre-release.** Not yet published. No license has been chosen yet (see below). Verified on one phone (Xiaomi Mi A3, Android 17) and one PC (Ubuntu 24.04). Not available on Google Play (see `docs/PLAY_STORE.md`).
 
@@ -9,7 +9,11 @@ Pairing by QR/PIN (SPAKE2) - notifications mirror/reply - SMS and MMS - calls - 
 Feature-by-feature status (including what is experimental or unverified): `docs/PROJECT_REPORT.md`.
 
 ## Screenshots
-_No screenshots have been added yet._ Place real screenshots in `docs/screenshots/` and link them here.
+_Screenshots will be added here. They must be real captures of the running apps._
+
+| PC: Device page | PC: Screen mirror | Android: Home | Android: Security |
+|---|---|---|---|
+| _placeholder_ `docs/screenshots/pc-device.png` | _placeholder_ `docs/screenshots/pc-mirror.png` | _placeholder_ `docs/screenshots/android-home.png` | _placeholder_ `docs/screenshots/android-security.png` |
 
 ## Quick start
 ```sh
@@ -29,10 +33,10 @@ Build from source: `docs/BUILD_GUIDE.md`. Run all tests: `tools/run_tests.sh`.
 | `CHANGELOG.md`, `RELEASE_NOTES.md`, `docs/DEVELOPMENT_HISTORY.md` | history |
 
 ## Security in one paragraph
-TLS 1.3 with a pinned certificate, an Ed25519-signed ephemeral key exchange, AES-256-GCM, SPAKE2 PIN pairing, per-feature permissions on both devices, a signed hash-chained audit log. Phone-controls-PC is off by default and expires after an hour. This has had automated tests, fuzzing and an AI-assisted review, **not** an independent human audit. Limits are listed in `docs/SECURITY.md`.
+TLS 1.3 with a pinned certificate, an Ed25519-signed ephemeral key exchange, AES-256-GCM, SPAKE2 PIN pairing, per-feature permissions on both devices, a signed hash-chained audit log. Phone-controls-PC is off by default, needs approval on the PC, shows a banner while active and ends after at most one hour. This has had automated tests, fuzzing and an AI-assisted review, **not** an independent human audit. Limits are listed in `docs/SECURITY.md`.
 
 ## Contributing / bugs
-`CONTRIBUTING.md`. Report security problems privately (`SECURITY.md`), never in a public issue.
+`CONTRIBUTING.md`. Report security problems privately through GitHub's "Report a vulnerability" (`SECURITY.md`), never in a public issue.
 
 ## License
-**None chosen yet.** Until a `LICENSE` file is added, all rights are reserved by the author and others have no permission to use, modify or redistribute the code.
+Apache License 2.0 (chosen; the `LICENSE` file is added once the copyright holder name is confirmed). Until that file exists, no license is granted.
