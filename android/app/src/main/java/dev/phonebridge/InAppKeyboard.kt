@@ -86,6 +86,18 @@ class InAppKeyboard(
         else -> 1f
     }
 
+    private fun spoken(k: String) = when (k) {
+        SHIFT -> if (shift == 2) "Caps lock on" else if (shift == 1) "Shift on" else "Shift"
+        BACK -> "Backspace"
+        ENTER -> "Enter"
+        SPACE -> "Space"
+        SYM -> "Numbers and symbols"
+        ABC -> "Letters"
+        MORE_SYM -> "More symbols"
+        HIDE -> "Hide keyboard"
+        else -> label(k)
+    }
+
     private fun label(k: String) = when (k) {
         SHIFT -> if (shift == 2) "⇪" else "⇧"
         BACK -> "⌫"
@@ -101,6 +113,18 @@ class InAppKeyboard(
     @SuppressLint("ClickableViewAccessibility")
     private fun keyView(k: String): TextView = TextView(context).apply {
         text = label(k)
+        contentDescription = spoken(k)
+        // The key acts on touch-down/up, which TalkBack's double-tap never produces: give it a click action too.
+        isClickable = true
+        accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun performAccessibilityAction(host: View, action: Int, args: android.os.Bundle?): Boolean {
+                if (action == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK) {
+                    if (k == BACK) onKey("BackSpace") else press(k)
+                    return true
+                }
+                return super.performAccessibilityAction(host, action, args)
+            }
+        }
         gravity = Gravity.CENTER
         setTextColor(Color.WHITE)
         textSize = if (k.length == 1) 15f else 12f

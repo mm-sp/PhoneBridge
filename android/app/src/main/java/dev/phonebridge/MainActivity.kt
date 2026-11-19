@@ -44,11 +44,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Ui.BG
-        // Landscape screens are short: hide the status bar so the tabs (and the terminal
-        // above the keyboard) get that space.
-        @Suppress("DEPRECATION")
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
         setContentView(buildShell())
+        applyOrientation()
         // An explicit launch (launcher icon, notification tap) is origin USER and is forwarded to the PC; a launch caused
         // by a sync command carries EXTRA_ORIGIN=auto and is not (no ping-pong). A restore after process death is not a launch.
         if (savedInstanceState == null) reportLaunch(intent)
@@ -108,7 +105,20 @@ class MainActivity : Activity() {
     private var currentIndex = 0
     private var current: PcPanel? = null
 
-    /** Home (pairing/setup) + the "control this PC" tabs. */
+    private lateinit var root: LinearLayout
+    private lateinit var right: LinearLayout
+    private lateinit var railScroll: ScrollView
+    private lateinit var railBar: LinearLayout
+    private lateinit var stripScroll: android.widget.HorizontalScrollView
+    private lateinit var stripBar: LinearLayout
+
+    private fun isPortrait() = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+
+    /**
+     * Home (pairing/setup) + the "control this PC" tabs.
+     * Landscape: a scrollable column of tabs on the left (1/4 of the width), the selected tab in the remaining 3/4.
+     * Portrait: the selected tab fills the screen and the tabs sit in a scrollable strip along the bottom.
+     */
     private fun buildShell(): View {
         filesPanel = FilesPanel(this)
         panels = listOf(DevicePanel(this), filesPanel, ScreenPanel(this), AppsPanel(this),
@@ -116,12 +126,8 @@ class MainActivity : Activity() {
         homeView = buildUi()
         content = android.widget.FrameLayout(this)
 
-        // Landscape layout: a scrollable column of tabs on the left (1/4 of the width),
-        // the selected tab (with a header bar) in the remaining 3/4.
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(12), dp(10), dp(12)) }
-        bar.addView(Ui.text(this, "PhoneBridge", 18f, bold = true, color = Ui.TEXT).apply {
-            setPadding(dp(10), dp(4), 0, dp(14))
-        })
+        railBar = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(12), dp(10), dp(12)) }
+        stripBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(dp(6), dp(4), dp(6), dp(4)) }
         val titles = listOf("Home") + panels.map { it.title }
         titles.forEachIndexed { i, t ->
             val b = Button(this).apply {
@@ -134,49 +140,106 @@ class MainActivity : Activity() {
                 isAllCaps = false
                 stateListAnimator = null
                 textSize = 14f
-                gravity = android.view.Gravity.START or android.view.Gravity.CENTER_VERTICAL
-                setPadding(dp(14), 0, dp(8), 0)
+                minHeight = dp(48); minimumHeight = dp(48)   // 48dp touch target; grows with large font sizes
                 setOnClickListener { selectTab(i) }
             }
             tabButtons.add(b)
-            bar.addView(b, LinearLayout.LayoutParams(-1, dp(44)).apply { bottomMargin = dp(4) })
         }
-        val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(18), dp(10), dp(14), dp(6))
         }
         headerTitle = Ui.text(this, "", 20f, bold = true)
+        androidx.core.view.ViewCompat.setAccessibilityHeading(headerTitle, true)
         header.addView(headerTitle, LinearLayout.LayoutParams(0, -2, 1f))
         headerChip = Ui.chip(this, "", Ui.MUTED, Ui.SURFACE2)
+        headerChip.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE   // announces connect/disconnect
         header.addView(headerChip)
         right.addView(header)
         right.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Ui.BG)
-        }
-        root.addView(ScrollView(this).apply {
+        root = LinearLayout(this).apply { setBackgroundColor(Ui.BG) }
+        railScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             setBackgroundColor(Ui.RAIL)
-            addView(bar)
-        }, LinearLayout.LayoutParams(0, -1, 1f))
-        root.addView(right, LinearLayout.LayoutParams(0, -1, 3f))
+            addView(railBar)
+        }
+        stripScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setBackgroundColor(Ui.RAIL)
+            addView(stripBar)
+        }
         selectTab(0)
         return root
+    }
+
+    /** Re-arranges the same views for the current orientation (the activity handles rotation itself, it is not recreated). */
+    private fun applyOrientation() {
+        val portrait = isPortrait()
+        // Landscape screens are short: hide the status bar there so the tabs (and the terminal above the keyboard)
+        // get that space. In portrait keep it.
+        @Suppress("DEPRECATION")
+        if (portrait) window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        else window.addFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+
+        root.removeAllViews()
+        railBar.removeAllViews()
+        stripBar.removeAllViews()
+        if (portrait) {
+            root.orientation = LinearLayout.VERTICAL
+            tabButtons.forEach { b ->
+                b.gravity = Gravity.CENTER
+                b.setPadding(dp(12), dp(4), dp(12), dp(4))
+                val icon = b.compoundDrawablesRelative[0] ?: b.compoundDrawablesRelative[1]
+                b.setCompoundDrawablesRelativeWithIntrinsicBounds(null, icon, null, null)
+                b.compoundDrawablePadding = dp(2)
+                b.textSize = 12f
+                stripBar.addView(b, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = dp(4) })
+            }
+            root.addView(right, LinearLayout.LayoutParams(-1, 0, 1f))
+            root.addView(stripScroll, LinearLayout.LayoutParams(-1, -2))
+        } else {
+            root.orientation = LinearLayout.HORIZONTAL
+            railBar.addView(Ui.text(this, "PhoneBridge", 18f, bold = true, color = Ui.TEXT).apply {
+                setPadding(dp(10), dp(4), 0, dp(14))
+            })
+            tabButtons.forEach { b ->
+                b.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                b.setPadding(dp(14), 0, dp(8), 0)
+                val icon = b.compoundDrawablesRelative[0] ?: b.compoundDrawablesRelative[1]
+                b.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null)
+                b.compoundDrawablePadding = dp(14)
+                b.textSize = 14f
+                railBar.addView(b, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
+            }
+            root.addView(railScroll, LinearLayout.LayoutParams(0, -1, 1f))
+            root.addView(right, LinearLayout.LayoutParams(0, -1, 3f))
+        }
+        styleTabs(currentIndex)   // the open panel is left alone: rotating must not restart it
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyOrientation()
+    }
+
+    private fun styleTabs(index: Int) {
+        tabButtons.forEachIndexed { i, b ->
+            b.background = Ui.rounded(if (i == index) Ui.ACCENT_SOFT else Color.TRANSPARENT, dp(12).toFloat())
+            b.setTextColor(if (i == index) Ui.TEXT else Ui.TEXT2)
+            b.compoundDrawableTintList = android.content.res.ColorStateList.valueOf(if (i == index) Ui.TEXT else Ui.MUTED)
+            b.typeface = Typeface.create(if (i == index) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+            b.isSelected = i == index   // TalkBack: "Files, selected"
+            androidx.core.view.ViewCompat.setStateDescription(b, if (i == index) "Selected" else null)
+        }
     }
 
     private fun selectTab(index: Int) {
         current?.onHide()
         content.removeAllViews()
         currentIndex = index
-        tabButtons.forEachIndexed { i, b ->
-            b.background = Ui.rounded(if (i == index) Ui.ACCENT_SOFT else Color.TRANSPARENT, dp(12).toFloat())
-            b.setTextColor(if (i == index) Ui.TEXT else Ui.TEXT2)
-            b.compoundDrawableTintList = android.content.res.ColorStateList.valueOf(if (i == index) Ui.TEXT else Ui.MUTED)
-            b.typeface = Typeface.create(if (i == index) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
-        }
+        styleTabs(index)
         headerTitle.text = if (index == 0) "Home" else panels[index - 1].title
         updateHeaderChip()
         if (index == 0) {
@@ -198,16 +261,19 @@ class MainActivity : Activity() {
         when {
             svc?.isConnected() == true -> {
                 headerChip.text = "●  ${pc?.name ?: "PC"}"
+                headerChip.contentDescription = "Connected to ${pc?.name ?: "PC"}"
                 headerChip.setTextColor(Ui.GREEN)
                 headerChip.background = Ui.rounded(Color.parseColor("#163327"), dp(20).toFloat())
             }
             pc == null -> {
                 headerChip.text = "○  Not paired"
+                headerChip.contentDescription = "Not paired"
                 headerChip.setTextColor(Ui.MUTED)
                 headerChip.background = Ui.rounded(Ui.SURFACE2, dp(20).toFloat())
             }
             else -> {
                 headerChip.text = "○  Disconnected"
+                headerChip.contentDescription = "Disconnected from ${pc.name}"
                 headerChip.setTextColor(Ui.WARN)
                 headerChip.background = Ui.rounded(Color.parseColor("#3A2E14"), dp(20).toFloat())
             }
@@ -238,7 +304,7 @@ class MainActivity : Activity() {
 
         val card = card()
         pairedText = Ui.text(this, "", 18f, bold = true)
-        statusText = Ui.text(this, "", 13f, color = Ui.TEXT2).apply { setPadding(0, dp(4), 0, dp(10)) }
+        statusText = Ui.text(this, "", 13f, color = Ui.TEXT2).apply { setPadding(0, dp(4), 0, dp(10)); accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
         card.addView(pairedText)
         card.addView(statusText)
         connectBtn = button("Connect to PC", primary = true) {

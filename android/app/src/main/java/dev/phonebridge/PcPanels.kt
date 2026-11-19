@@ -12,6 +12,7 @@ import android.graphics.Matrix
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
@@ -298,6 +299,7 @@ class ScreenPanel(act: Activity) : PcPanel(act) {
     private val image = ImageView(act).apply {
         scaleType = ImageView.ScaleType.FIT_CENTER
         setBackgroundColor(Color.BLACK)
+        contentDescription = "Live view of the PC screen. Touch to click, drag to scroll or move."
     }
     private var streaming = false
     private var noInput = false
@@ -408,6 +410,7 @@ class FullScreenView(
     private val image = ImageView(act).apply {
         scaleType = ImageView.ScaleType.FIT_CENTER
         setBackgroundColor(Color.BLACK)
+        contentDescription = "Live view of the PC screen. Touch to click, drag to scroll or move."
     }
     private val keys = KeyCaptureView(act,
         onText = { t -> input(JSONObject().put("kind", "text").put("text", t)) },
@@ -632,7 +635,7 @@ class AppsPanel(act: Activity) : PcPanel(act) {
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(dp(4), dp(10), dp(4), dp(10))
             }
-            val icon = ImageView(act)
+            val icon = ImageView(act).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }   // the name below says it
             val b64 = a.optString("icon")
             if (b64.isNotEmpty()) runCatching {
                 val raw = Crypto.unb64(b64)
@@ -641,6 +644,7 @@ class AppsPanel(act: Activity) : PcPanel(act) {
             cell.addView(icon, LinearLayout.LayoutParams(dp(44), dp(44)))
             cell.addView(text(a.optString("name"), 11f).apply { gravity = Gravity.CENTER; maxLines = 2 })
             val id = a.optString("id")
+            cell.contentDescription = "Open ${a.optString("name")} on the PC"
             cell.setOnClickListener { if (send("pc.app_launch", JSONObject().put("id", id))) toast("Opening ${a.optString("name")}…") }
             line!!.addView(weighted(cell))
             n++
@@ -883,6 +887,12 @@ class ServersPanel(act: Activity) : PcPanel(act) {
  * (vim, htop) aren't supported — the PC runs the shell with TERM=dumb.
  */
 class TerminalPanel(act: Activity) : PcPanel(act) {
+    private companion object {
+        /** What a screen reader says for the symbol-only extra keys. */
+        val SPOKEN_KEYS = mapOf("↑" to "Up arrow", "↓" to "Down arrow", "←" to "Left arrow", "→" to "Right arrow",
+            "ESC" to "Escape", "PGUP" to "Page up", "PGDN" to "Page down", "/" to "Slash", "-" to "Dash")
+    }
+
     override val title = "Terminal"
     private val screen = TerminalBuffer()
     private val output = TextView(act).apply {
@@ -922,7 +932,7 @@ class TerminalPanel(act: Activity) : PcPanel(act) {
             listOf("TAB", "CTRL", "ALT", "←", "↓", "→", "PGDN"),
         )) {
             val r = row().apply { setBackgroundColor(InAppKeyboard.BACKDROP); setPadding(dp(4), dp(2), dp(4), 0) }
-            for (label in line) r.addView(extraKey(label), LinearLayout.LayoutParams(0, dp(22), 1f).apply {
+            for (label in line) r.addView(extraKey(label), LinearLayout.LayoutParams(0, dp(if (act.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) 36 else 22), 1f).apply {
                 setMargins(dp(2), 0, dp(2), dp(2))
             })
             keyArea.addView(r)
@@ -960,6 +970,17 @@ class TerminalPanel(act: Activity) : PcPanel(act) {
         minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
         setPadding(0, 0, 0, 0)
         background = Ui.rounded(InAppKeyboard.KEY, dp(7).toFloat(), Color.argb(40, 255, 255, 255), 1)
+        contentDescription = SPOKEN_KEYS[label] ?: label
+        // Some keys act on touch-down/up (key repeat), which TalkBack's double-tap never produces: route its click here.
+        isClickable = true
+        accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
+                if (action == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK && label != "CTRL" && label != "ALT") {
+                    pressExtra(label); return true
+                }
+                return super.performAccessibilityAction(host, action, args)
+            }
+        }
         when (label) {
             "CTRL", "ALT" -> {
                 modButtons[label] = this
@@ -1099,7 +1120,8 @@ class TerminalPanel(act: Activity) : PcPanel(act) {
 
     private fun size(): Pair<Int, Int> {
         val charW = output.paint.measureText("M").coerceAtLeast(1f)
-        val w = (scroller.width.takeIf { it > 0 } ?: act.resources.displayMetrics.widthPixels * 3 / 4) - dp(16)
+        val portrait = act.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        val w = (scroller.width.takeIf { it > 0 } ?: (act.resources.displayMetrics.widthPixels * (if (portrait) 1f else 0.75f)).toInt()) - dp(16)
         val h = (scroller.height.takeIf { it > 0 } ?: act.resources.displayMetrics.heightPixels / 2)
         return (w / charW).toInt().coerceIn(20, 300) to (h / output.lineHeight).coerceIn(5, 200)
     }

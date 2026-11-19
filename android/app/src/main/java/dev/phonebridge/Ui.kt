@@ -56,7 +56,7 @@ object Ui {
         b.stateListAnimator = null
         b.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         b.textSize = 14f
-        b.minHeight = dp(ctx, 40); b.minimumHeight = dp(ctx, 40)
+        b.minHeight = dp(ctx, 48); b.minimumHeight = dp(ctx, 48)   // 48dp minimum touch target
         b.setPadding(dp(ctx, 16), 0, dp(ctx, 16), 0)
         val r = dp(ctx, 12).toFloat()
         val (bg, fg) = when (kind) {
