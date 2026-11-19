@@ -46,7 +46,7 @@ jobs:
           # Hosted runners sometimes get HTTP 503 from the Ubuntu package mirrors. APT retries each file itself
           # (Acquire::Retries), the whole update+install sequence is retried up to 3 times, and an incomplete
           # "apt-get update" (some index could not be fetched) counts as a failure (APT::Update::Error-Mode=any).
-          PKGS="python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base xvfb openjdk-17-jdk-headless"
+          PKGS="python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav xvfb openjdk-17-jdk-headless"
           APT_OPTS="-o Acquire::Retries=3 -o APT::Update::Error-Mode=any"
           for attempt in 1 2 3; do
             # One log per attempt, overwritten each time: after the last failed attempt it holds that attempt's output.
