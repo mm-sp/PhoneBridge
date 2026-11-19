@@ -11,16 +11,26 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.14.7' }
       - name: Lint + debug APK (no signing credentials needed)
         working-directory: android
-        run: gradle :app:lintDebug :app:assembleDebug --no-daemon
-      - name: Unsigned-safe release build check (R8 + resource shrinking)
+        run: |
+          set -o pipefail
+          gradle :app:lintDebug :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle-debug.log
+      - name: Explain failure (annotations)
+        if: failure()
+        run: .github/ci-annotate.sh gradle-debug.log "android lint/debug build"
+      - name: Release build check (R8 + resource shrinking)
         working-directory: android
-        run: gradle :app:assembleRelease --no-daemon   # falls back to the debug key and warns when no secrets exist
+        run: |
+          set -o pipefail
+          gradle :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee ../gradle-release.log   # falls back to the debug key and warns when no secrets exist
+      - name: Explain failure (annotations)
+        if: failure()
+        run: .github/ci-annotate.sh gradle-release.log "android release build"
       - uses: actions/upload-artifact@v4
         with:
           name: android-debug
@@ -35,7 +45,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 xvfb openjdk-17-jdk-headless
       - name: Tests (the Kotlin interop tests need Gradle's Kotlin compiler and are skipped here; run them locally)
         env: { PHONEBRIDGE_STRICT: '0' }
-        run: tools/run_tests.sh
+        run: |
+          set -o pipefail
+          tools/run_tests.sh 2>&1 | tee pc-tests.log
+      - name: Explain failure (annotations)
+        if: failure()
+        run: .github/ci-annotate.sh pc-tests.log "pc tests"
 
   release:
     # Only for version tags, only in the upstream repository, only when the signing secrets exist. Secrets are written to
@@ -46,7 +61,7 @@ jobs:
     environment: release          # protect this environment with required reviewers in the repository settings
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: '8.14.7' }
