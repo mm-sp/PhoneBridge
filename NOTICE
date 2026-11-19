@@ -1,0 +1,7 @@
+PhoneBridge
+Copyright 2026 Saiprakash Manepalli
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+This product bundles or depends on third-party software under their own licenses, including BouncyCastle (MIT-style),
+zxing-android-embedded (Apache-2.0), AndroidX (Apache-2.0), cryptography (Apache-2.0/BSD), Pillow (HPND) and
+qrcode (BSD). Check each dependency's license before redistributing binaries.

@@ -8,4 +8,5 @@
 - Android: portrait layout and TalkBack support (not yet tested on a device); release build with R8 + resource shrinking and log stripping; cleartext traffic disabled.
 - Release signing moved to a permanent key stored outside the repository.
 - Tooling: `tools/run_tests.sh` (strict), `tools/release.sh`, keystore backup/verify scripts, GitHub Actions workflow (unrun).
+- Licensed under Apache-2.0 (`LICENSE`, `NOTICE`).
 - Earlier history: see `RELEASE_NOTES.md` (1.0 - 1.3).

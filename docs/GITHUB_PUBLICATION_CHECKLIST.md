@@ -9,7 +9,7 @@ Nothing has been created, pushed or published. Status: PASS / FAIL / WARNING / N
 | GitHub account | `mm-sp`, user id `62277083` (public API), created 2020-03-17, 0 public repositories, no public display name | PASS (account exists) |
 | Description | "Securely connect and control your Android phone and Linux PC with wireless and USB connectivity." | decided |
 | Topics (proposed) | `android`, `linux`, `kotlin`, `python`, `gtk4`, `libadwaita`, `phone-link`, `screen-mirroring`, `file-transfer`, `privacy`, `end-to-end-encryption`, `self-hosted` | proposed |
-| License | Apache-2.0 | **LICENSE file NOT created: copyright holder name not yet confirmed** |
+| License | Apache-2.0, `Copyright 2026 Saiprakash Manepalli` (`LICENSE` = canonical text, sha256 `cfc7749b...523d30`; copyright line in `NOTICE`) | PASS - created. Dependency licenses in `NOTICE` are a summary from memory, **not verified** against each package |
 | Security contact | GitHub private vulnerability reporting (`SECURITY.md`); no personal e-mail published | PASS (must be enabled in repo settings after creation) |
 | Noreply commit identity | `62277083+mm-sp@users.noreply.github.com` (GitHub's documented `<id>+<username>@users.noreply.github.com` format, id from the public API) | PASS - not guessed |
 | Screenshots | placeholders only in README | TODO (needs real captures) |

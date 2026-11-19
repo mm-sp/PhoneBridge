@@ -39,4 +39,4 @@ TLS 1.3 with a pinned certificate, an Ed25519-signed ephemeral key exchange, AES
 `CONTRIBUTING.md`. Report security problems privately through GitHub's "Report a vulnerability" (`SECURITY.md`), never in a public issue.
 
 ## License
-Apache License 2.0 (chosen; the `LICENSE` file is added once the copyright holder name is confirmed). Until that file exists, no license is granted.
+Apache License 2.0 - see `LICENSE` and `NOTICE`. Copyright 2026 Saiprakash Manepalli.
