@@ -39,3 +39,6 @@ captures/
 backups/
 android/app/release/
 android/app/debug/
+*.pem
+*.key
+*.bundle
