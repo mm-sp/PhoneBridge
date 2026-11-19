@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PhoneBridge
+Comment=Link your Android phone to this PC — no account, no cloud
+Exec=phonebridge
+Icon=dev.phonebridge.Linux
+Terminal=false
+Categories=Utility;Network;
+StartupNotify=true

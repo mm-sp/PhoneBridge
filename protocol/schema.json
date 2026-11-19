@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PhoneBridge control-channel envelope",
+  "type": "object",
+  "required": [
+    "ch",
+    "type",
+    "seq",
+    "payload"
+  ],
+  "properties": {
+    "ch": {
+      "type": "string",
+      "enum": [
+        "control",
+        "file",
+        "video"
+      ],
+      "description": "Which logical channel this frame belongs to."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "pair.hello",
+        "pair.ack",
+        "pair.lan_info",
+        "device.info",
+        "notification.posted",
+        "notification.removed",
+        "notification.action",
+        "clipboard.update",
+        "sms.list_threads",
+        "sms.thread_list",
+        "sms.get_thread",
+        "sms.thread_messages",
+        "sms.send",
+        "sms.new",
+        "call.ringing",
+        "call.state",
+        "call.action",
+        "file.offer",
+        "file.accept",
+        "file.reject",
+        "file.chunk",
+        "file.done",
+        "photos.list",
+        "photos.list_result",
+        "photos.get",
+        "photo.new",
+        "mirror.start",
+        "mirror.stop",
+        "mirror.frame",
+        "mirror.input",
+        "webcam.start",
+        "webcam.stop",
+        "webcam.frame",
+        "apps.list_request",
+        "apps.list",
+        "apps.launch",
+        "error",
+        "ping",
+        "pong",
+        "device.info_request",
+        "notifications.sync",
+        "notifications.all",
+        "notifications.unavailable",
+        "sms.sent",
+        "calls.history_request",
+        "calls.history",
+        "contacts.list_request",
+        "contacts.list",
+        "call.dial",
+        "files.list",
+        "files.list_result",
+        "files.get",
+        "file.saved",
+        "webcam.switch",
+        "video.started",
+        "video.stopped",
+        "mirror.status",
+        "webcam.status"
+      ]
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic per-connection sequence number, used to detect drops on the unreliable BT fallback transport."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Type-specific body; see PROTOCOL.md section 4 for the shape expected per `type`."
+    }
+  },
+  "additionalProperties": false
+}

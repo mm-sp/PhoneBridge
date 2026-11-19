@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="input_service_description">Lets PhoneBridge on your PC tap, swipe, type and press Back/Home/Recents on this phone while screen mirroring. Only acts on commands from your paired PC.</string>
+</resources>

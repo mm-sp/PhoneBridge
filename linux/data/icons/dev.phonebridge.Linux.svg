@@ -1,0 +1,34 @@
+<!-- PhoneBridge app icon: a phone and a laptop joined by a "bridge" arc. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1D3461"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <linearGradient id="arc" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4C8DFF"/>
+      <stop offset="1" stop-color="#7FE0FF"/>
+    </linearGradient>
+    <linearGradient id="phone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5B9BFF"/>
+      <stop offset="1" stop-color="#2F6FED"/>
+    </linearGradient>
+  </defs>
+  <!-- tile -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <g transform="translate(-6,-9)">
+  <!-- bridge arc linking the two devices -->
+  <path d="M74 96 C 96 40, 168 34, 190 82" fill="none" stroke="url(#arc)" stroke-width="11" stroke-linecap="round"/>
+  <circle cx="74" cy="96" r="9" fill="#4C8DFF"/>
+  <circle cx="190" cy="82" r="9" fill="#7FE0FF"/>
+  <!-- laptop -->
+  <rect x="112" y="98" width="104" height="70" rx="10" fill="#0E1626" stroke="#E8EDF5" stroke-width="9"/>
+  <rect x="124" y="110" width="80" height="46" rx="4" fill="#4C8DFF" fill-opacity="0.25"/>
+  <path d="M100 186 H228" stroke="#E8EDF5" stroke-width="10" stroke-linecap="round"/>
+  <!-- phone (in front) -->
+  <rect x="44" y="110" width="66" height="112" rx="16" fill="url(#phone)" stroke="#E8EDF5" stroke-width="8"/>
+  <rect x="66" y="122" width="22" height="5" rx="2.5" fill="#E8EDF5" fill-opacity="0.9"/>
+  <circle cx="77" cy="204" r="5" fill="#E8EDF5"/>
+  </g>
+</svg>

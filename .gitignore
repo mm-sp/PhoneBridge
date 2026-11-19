@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv*/
+android/build/
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/local.properties
+android/keystore/
+android/keystore.properties
+*.tar.gz

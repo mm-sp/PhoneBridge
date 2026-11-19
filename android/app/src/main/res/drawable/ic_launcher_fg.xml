@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon foreground layer: phone + laptop joined by a "bridge" arc. The artwork
+     is drawn on the PC icon's 256-unit grid and scaled into the adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:scaleX="0.29" android:scaleY="0.29" android:translateX="16.3" android:translateY="17.7">
+        <group android:translateX="-6" android:translateY="-9">
+            <!-- bridge arc -->
+            <path android:pathData="M74,96 C96,40 168,34 190,82" android:strokeWidth="11" android:strokeLineCap="round"
+                android:fillColor="#00000000">
+                <aapt:attr name="android:strokeColor">
+                    <gradient android:type="linear" android:startX="74" android:startY="0" android:endX="190" android:endY="0">
+                        <item android:offset="0" android:color="#FF4C8DFF" />
+                        <item android:offset="1" android:color="#FF7FE0FF" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+            <path android:pathData="M65,96 A9,9 0 1,0 83,96 A9,9 0 1,0 65,96 Z" android:fillColor="#FF4C8DFF" />
+            <path android:pathData="M181,82 A9,9 0 1,0 199,82 A9,9 0 1,0 181,82 Z" android:fillColor="#FF7FE0FF" />
+            <!-- laptop -->
+            <path android:pathData="M122,98 H206 A10,10 0 0,1 216,108 V158 A10,10 0 0,1 206,168 H122 A10,10 0 0,1 112,158 V108 A10,10 0 0,1 122,98 Z"
+                android:fillColor="#FF0E1626" android:strokeColor="#FFE8EDF5" android:strokeWidth="9" />
+            <path android:pathData="M128,110 H200 A4,4 0 0,1 204,114 V152 A4,4 0 0,1 200,156 H128 A4,4 0 0,1 124,152 V114 A4,4 0 0,1 128,110 Z"
+                android:fillColor="#404C8DFF" />
+            <path android:pathData="M100,186 H228" android:strokeColor="#FFE8EDF5" android:strokeWidth="10"
+                android:strokeLineCap="round" android:fillColor="#00000000" />
+            <!-- phone -->
+            <path android:pathData="M60,110 H94 A16,16 0 0,1 110,126 V206 A16,16 0 0,1 94,222 H60 A16,16 0 0,1 44,206 V126 A16,16 0 0,1 60,110 Z"
+                android:strokeColor="#FFE8EDF5" android:strokeWidth="8">
+                <aapt:attr name="android:fillColor">
+                    <gradient android:type="linear" android:startX="0" android:startY="110" android:endX="0" android:endY="222">
+                        <item android:offset="0" android:color="#FF5B9BFF" />
+                        <item android:offset="1" android:color="#FF2F6FED" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+            <path android:pathData="M68.5,122 H85.5 A2.5,2.5 0 0,1 85.5,127 H68.5 A2.5,2.5 0 0,1 68.5,122 Z" android:fillColor="#E6E8EDF5" />
+            <path android:pathData="M72,204 A5,5 0 1,0 82,204 A5,5 0 1,0 72,204 Z" android:fillColor="#FFE8EDF5" />
+        </group>
+    </group>
+</vector>

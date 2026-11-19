@@ -1,0 +1,165 @@
+/* PhoneBridge dark theme — the same palette as the phone app (android/.../Ui.kt):
+   navy surfaces, one bright blue accent, green/amber/red for status. These override
+   libadwaita's named colours, so every stock widget follows along. */
+
+@define-color phonebridge_accent #4C8DFF;
+
+@define-color accent_bg_color #4C8DFF;
+@define-color accent_color #78A9FF;
+@define-color accent_fg_color #ffffff;
+
+@define-color window_bg_color #0E131C;
+@define-color window_fg_color #E8EDF5;
+@define-color view_bg_color #121925;
+@define-color view_fg_color #E8EDF5;
+@define-color headerbar_bg_color #121925;
+@define-color headerbar_fg_color #E8EDF5;
+@define-color headerbar_backdrop_color #0E131C;
+@define-color sidebar_bg_color #121925;
+@define-color sidebar_fg_color #E8EDF5;
+@define-color sidebar_backdrop_color #121925;
+@define-color card_bg_color #1A2230;
+@define-color card_fg_color #E8EDF5;
+@define-color popover_bg_color #1A2230;
+@define-color dialog_bg_color #1A2230;
+@define-color success_color #3DD68C;
+@define-color warning_color #F5A524;
+@define-color error_color #FF6363;
+
+/* Sidebar: roomier rows, accent-tinted selection. */
+.navigation-sidebar row {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  border-radius: 10px;
+  margin: 1px 6px;
+}
+.navigation-sidebar row:selected {
+  background-color: alpha(@phonebridge_accent, 0.22);
+}
+
+/* Phone status card at the bottom of the sidebar. */
+.status-card {
+  background-color: @card_bg_color;
+  border: 1px solid alpha(white, 0.06);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+/* Device tab hero card. */
+.hero-card {
+  background-image: linear-gradient(135deg, alpha(@phonebridge_accent, 0.28), alpha(@phonebridge_accent, 0.06));
+  border: 1px solid alpha(@phonebridge_accent, 0.35);
+  border-radius: 18px;
+  padding: 18px 20px;
+}
+.hero-icon {
+  color: #78A9FF;
+  background-color: alpha(@phonebridge_accent, 0.18);
+  border-radius: 16px;
+  padding: 12px;
+}
+.chip {
+  background-color: alpha(white, 0.08);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.85em;
+}
+.status-pill {
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8em;
+  font-weight: bold;
+}
+.status-pill.online {
+  color: @success_color;
+  background-color: alpha(@success_color, 0.14);
+}
+.status-pill.offline {
+  color: alpha(@window_fg_color, 0.55);
+  background-color: alpha(white, 0.06);
+}
+
+/* Cards and lists: a little rounder than stock Adwaita. */
+.boxed-list,
+.card {
+  border-radius: 14px;
+}
+.suggested-action {
+  background-color: @phonebridge_accent;
+}
+
+/* Photos/Apps grid tiles */
+flowbox > flowboxchild > button {
+  border-radius: 12px;
+  padding: 8px;
+}
+flowbox > flowboxchild > button:hover {
+  background-color: alpha(@phonebridge_accent, 0.12);
+}
+button.photo-tile {
+  padding: 0;
+  border-radius: 10px;
+}
+button.photo-tile picture {
+  border-radius: 10px;
+}
+
+/* Messages page chat bubbles */
+.bubble {
+  padding: 7px 13px;
+  border-radius: 18px;
+  margin: 1px 0;
+}
+.bubble-in {
+  background-color: #1F2838;
+  margin-right: 80px;
+}
+.bubble-out {
+  background-color: alpha(@phonebridge_accent, 0.32);
+  margin-left: 80px;
+}
+
+/* Active call strip on the Calls page */
+.call-banner {
+  background-color: alpha(@phonebridge_accent, 0.16);
+  border-radius: 14px;
+}
+
+/* Black surround for the mirrored phone screen */
+.mirror-frame {
+  background-color: #05080D;
+  border-radius: 14px;
+}
+
+/* Mirror page volume − / + buttons */
+button.volume-btn {
+  font-size: 1.25em;
+  font-weight: bold;
+  min-width: 34px;
+}
+
+/* Keyboard tab: the panel that takes the PC's key presses */
+.type-pad {
+  background-color: @card_bg_color;
+  border: 2px dashed alpha(white, 0.12);
+  border-radius: 16px;
+  padding: 18px;
+}
+.type-pad.focused {
+  border: 2px solid @phonebridge_accent;
+  background-color: alpha(@phonebridge_accent, 0.08);
+}
+.type-transcript {
+  font-family: monospace;
+  font-size: 1.15em;
+}
+
+/* Screen mirror: live-typing bar and clipboard strip */
+.type-pad {
+  padding: 10px 14px;
+}
+.clip-strip {
+  background-color: @card_bg_color;
+  border-radius: 12px;
+  padding: 6px 10px;
+}

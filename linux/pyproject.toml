@@ -1,0 +1,28 @@
+[project]
+name = "phonebridge"
+version = "1.4.0"
+description = "Login-free phone-to-Linux-PC bridge (notifications, SMS, calls, photos, files, screen mirroring, webcam) — no account, no cloud"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=46",
+    "qrcode>=7.4",
+    "pillow>=13.0.0",   # earlier versions have known memory-safety/DoS vulnerabilities (tools/audit_dependencies.py)
+    "PyGObject>=3.46",
+]
+
+[project.optional-dependencies]
+fuse = ["fusepy>=3.0"]
+test = ["qrcode>=7.4"]
+
+[project.scripts]
+phonebridge = "phonebridge.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["phonebridge*"]
+
+[tool.setuptools.package-data]
+phonebridge = ["ui/style.css", "ui/icons/*.svg"]

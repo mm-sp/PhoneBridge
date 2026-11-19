@@ -1,0 +1,5 @@
+cryptography>=46
+qrcode>=7.4
+pillow>=13.0.0
+PyGObject>=3.46
+fusepy>=3.0   # optional: mount the phone as a folder in your file manager
