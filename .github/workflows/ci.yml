@@ -42,7 +42,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: System packages
-        run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base xvfb openjdk-17-jdk-headless
+        run: |
+          # Hosted runners sometimes get HTTP 503 from the Ubuntu package mirrors. APT retries each file itself
+          # (Acquire::Retries), the whole update+install sequence is retried up to 3 times, and an incomplete
+          # "apt-get update" (some index could not be fetched) counts as a failure (APT::Update::Error-Mode=any).
+          PKGS="python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base xvfb openjdk-17-jdk-headless"
+          APT_OPTS="-o Acquire::Retries=3 -o APT::Update::Error-Mode=any"
+          for attempt in 1 2 3; do
+            # One log per attempt, overwritten each time: after the last failed attempt it holds that attempt's output.
+            if { sudo apt-get update $APT_OPTS && sudo apt-get install -y $APT_OPTS $PKGS; } > apt-attempt.log 2>&1; then
+              tail -n 5 apt-attempt.log
+              exit 0
+            fi
+            echo "::warning title=apt::attempt $attempt of 3 failed"
+            if [ "$attempt" -lt 3 ]; then
+              tail -n 15 apt-attempt.log
+              sleep $((attempt * 30))
+            fi
+          done
+          echo "apt failed 3 times; full output of the last attempt:"
+          cat apt-attempt.log
+          grep -E '^(E|W):' apt-attempt.log | head -n 8 | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error title=apt::$line"; done
+          exit 1
       - name: Tests (the Kotlin interop tests need Gradle's Kotlin compiler and are skipped here; run them locally)
         env: { PHONEBRIDGE_STRICT: '0' }
         run: |
