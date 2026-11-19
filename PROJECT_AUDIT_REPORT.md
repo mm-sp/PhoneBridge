@@ -536,3 +536,26 @@ How estimated (rough, not measured): I weighted the ~31 inventory rows in §4 �
 * Not run: Gradle builds, lint, hardware harness, OSV scan, GUI screenshots.
 * Not read line-by-line: most of `PcPanels.kt`, `BridgeService.kt`, `Video.kt`, `controller.py`, `crypto.py`, `secure_session.py`; security claims about them rely on tests/docs, flagged as "docs claim" where applicable.
 * Statements about the Mi A3 hardware results come from `docs/SECURITY.md`, `docs/SCREEN_SYNC.md` and my earlier project notes, not from anything I ran in this audit.
+
+---
+
+## Appendix B — Remediation log (2026-11-19, after the audit)
+
+Sections above describe the project **as audited**; this table records what was changed afterwards.
+
+| Issue | Result | Verification |
+|---|---|---|
+| ISSUE-01 no VCS | **Fixed locally**: `git init`, `.gitignore`, first commit (`cfcebf8`). No remote added (your decision). | `git log` |
+| ISSUE-02 / S-1 debug-signed release | **Fixed**: new 4096-bit release keystore in `android/keystore/` (untracked), `build.gradle.kts` reads `android/keystore.properties`, warns and falls back to debug if missing. | `apksigner verify`: signer `CN=PhoneBridge`, not the debug cert |
+| ISSUE-03 stale docs | **Fixed**: README status/keystore/test sections, RELEASE_NOTES 1.4.0, SECURITY.md test count. | read-back |
+| ISSUE-04 UI tests fail without qrcode | **Fixed**: `qr.py` imports `qrcode` lazily; `tools/run_tests.sh` builds a venv from requirements. | strict run: 692 passed, 0 failed (PC) |
+| ISSUE-05 silent skips | **Fixed**: `PHONEBRIDGE_STRICT=1` (default in `run_tests.sh`) turns SKIP into FAIL. Kotlin tests re-run with Gradle visible: audit 43, interop 18, sync 9, mms 12 passed. | runs above |
+| ISSUE-06 per-message disk read | **Fixed**: gate re-reads the device file only when its mtime/size changed, so revoking still applies on the next message. (A first 1 s TTL version broke `test_pc_control`; replaced.) | `test_pc_control` 12/12 |
+| ISSUE-09 deps drift | **Fixed**: `fuse` and `test` extras in `pyproject.toml`. | |
+| ISSUE-11 / S-6 env leak to shell | **Fixed**: `PHONEBRIDGE_*` stripped from the phone-controlled shell's environment. | code; no dedicated test added |
+| ISSUE-15 clutter | **Mitigated**: ignored by `.gitignore` (files not deleted). | |
+
+**Not fixed — needs your decision or hardware:**
+* **Push to a remote** (ISSUE-01 second half) and **moving `release.key` offline** (S-12): outward-facing / your secrets. **Back up `android/keystore/` and `keystore.properties`** — they are untracked.
+* Installing the new release APK over an existing debug-signed install requires uninstalling first (Android signature rule), which drops the pairing. The debug build is unchanged, so your current workflow is not affected.
+* ISSUE-07 Android portrait/TalkBack, ISSUE-08 splitting the large files, ISSUE-12 R8 (can't be validated without on-device testing), ISSUE-10 PC-control expiry/approval (a product decision), ISSUE-14 auto-mirror setting, ISSUE-16/17 (need hardware / a crash-consistency test), `gradlew` wrapper, CI, packaging, independent crypto review, MMS/relay/AP real-world validation, rotation sync.
