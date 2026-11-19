@@ -27,20 +27,27 @@ android {
         val f = rootProject.file("keystore.properties")
         if (f.exists()) f.inputStream().use { load(it) }
     }
+    // Credentials come from environment variables (CI) or android/keystore.properties (local, untracked) - never from
+    // this file. Variables: PHONEBRIDGE_KEYSTORE (path), PHONEBRIDGE_KEYSTORE_PASSWORD, PHONEBRIDGE_KEY_ALIAS,
+    // PHONEBRIDGE_KEY_PASSWORD.
+    fun signingValue(env: String, prop: String): String? = System.getenv(env) ?: keystoreProps.getProperty(prop)
     signingConfigs {
-        if (keystoreProps.containsKey("storeFile")) {
+        val store = signingValue("PHONEBRIDGE_KEYSTORE", "storeFile")
+        if (store != null) {
             create("release") {
-                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
+                storeFile = rootProject.file(store)
+                storePassword = signingValue("PHONEBRIDGE_KEYSTORE_PASSWORD", "storePassword")
+                keyAlias = signingValue("PHONEBRIDGE_KEY_ALIAS", "keyAlias")
+                keyPassword = signingValue("PHONEBRIDGE_KEY_PASSWORD", "keyPassword")
             }
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release") ?: run {
                 logger.warn("WARNING: android/keystore.properties missing - release APK is signed with the DEBUG key")
                 signingConfigs.getByName("debug")
