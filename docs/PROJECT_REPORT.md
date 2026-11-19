@@ -54,7 +54,7 @@ Pairing, mirroring and file transfer: `docs/ARCHITECTURE.md`. Remote control: `p
 PC: Python >= 3.10, PyGObject >= 3.46 (GTK4/libadwaita), `cryptography` >= 46, `qrcode` >= 7.4, `pillow` >= 13, optional `fusepy`; system GStreamer, adb, v4l2loopback, NetworkManager, BlueZ, Avahi. Android: Kotlin 2.0.21, AGP 8.11.1, Gradle 8.14.7, compileSdk 35, minSdk 26, targetSdk 29, BouncyCastle 1.87, zxing-android-embedded 4.3.0, androidx.core 1.13.1. OSV scan (run in this audit): 7 packages, no known vulnerabilities (the PC packages were read from the installed app venv, not the test venv).
 
 ## 19. Directory structure
-`linux/phonebridge` (app), `linux/tests` (39 test files + Kotlin harnesses), `linux/tools` (hardware harness), `android/app/src/main/java/dev/phonebridge` (32 Kotlin files), `protocol/` (spec + schema), `docs/`, `packaging/`, `tools/` (release, backup, audit scripts), `.github/workflows/ci.yml`.
+`linux/phonebridge` (app), `linux/tests` (40 test files + Kotlin harnesses), `linux/tools` (hardware harness), `android/app/src/main/java/dev/phonebridge` (32 Kotlin files), `protocol/` (spec + schema), `docs/`, `packaging/`, `tools/` (release, backup, audit scripts), `.github/workflows/ci.yml`.
 
 ## 20-22. Build, install, configure
 `docs/BUILD_GUIDE.md`, `docs/INSTALLATION.md`. Configuration is through the app UI; environment variables: `PHONEBRIDGE_ALLOW_PUBLIC`, `PHONEBRIDGE_ALLOW_TLS12`, `PHONEBRIDGE_PASSPHRASE` (fallback key file), `PHONEBRIDGE_PC_CONTROL_MINUTES`, `PHONEBRIDGE_ORIGIN`.
@@ -103,7 +103,7 @@ Layout in section 19. Release procedure: `docs/RELEASE.md`; checklist before goi
 `docs/TROUBLESHOOTING.md`.
 
 ## 35. Contributing
-`CONTRIBUTING.md`. No license is chosen yet, so contributions cannot currently be accepted under defined terms.
+`CONTRIBUTING.md`. The project is licensed under Apache-2.0 (`LICENSE`, `NOTICE`; copyright 2026 Saiprakash Manepalli); contributions are accepted under the same license.
 
 ## 36. Conclusion
 A feature-rich, security-minded project with a strong automated test base on the PC side and honest documentation of its limits. Remaining gaps are mostly release engineering and on-device validation rather than missing core functionality.

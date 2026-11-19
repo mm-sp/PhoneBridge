@@ -2,11 +2,33 @@
 
 Securely connect and control your Android phone and Linux PC with wireless and USB connectivity. An account-free, cloud-free bridge between an **Android phone** and a **Linux desktop**: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and (opt-in) controlling the PC from the phone. Everything travels directly between your two devices, end-to-end encrypted.
 
-> **Status: 1.4.0, pre-release.** Not yet published. No license has been chosen yet (see below). Verified on one phone (Xiaomi Mi A3, Android 17) and one PC (Ubuntu 24.04). Not available on Google Play (see `docs/PLAY_STORE.md`).
+> **Status: 1.4.0, pre-release.** Not yet published. Licensed under Apache-2.0. Verified on one phone (Xiaomi Mi A3, Android 17) and one PC (Ubuntu 24.04). Not available on Google Play (see `docs/PLAY_STORE.md`).
 
-## Features
-Pairing by QR/PIN (SPAKE2) - notifications mirror/reply - SMS and MMS - calls - photo browser - file transfer with resume and SHA-256 - clipboard sync (text, images) - screen mirroring with mouse/keyboard (TCP or encrypted UDP) - smart display-off "screen sync" - phone camera as a webcam (v4l2loopback) - app launcher - phone-controls-PC tabs (files, terminal, ports, services, Docker, screen) with a time-limited switch - USB link and optional self-hosted relay - Security dashboards with a signed audit log and per-feature permissions.
-Feature-by-feature status (including what is experimental or unverified): `docs/PROJECT_REPORT.md`.
+## Features and status
+Labels: **Implemented** = built and covered by automated tests and/or the author's hardware runs; **Partial** = works but with known gaps; **Experimental** = may fail on some apps/devices; **Not tested** = code exists, not exercised on a device in this release. Details and file locations: [`docs/PROJECT_REPORT.md`](docs/PROJECT_REPORT.md).
+
+| Feature | Status |
+|---|---|
+| QR / PIN pairing (SPAKE2), encrypted sessions, discovery, USB link | Implemented |
+| Notifications (mirror, dismiss, reply) | Implemented |
+| File transfer both ways (resume, SHA-256), photo browser | Implemented |
+| Clipboard sync (text, images) | Implemented (phone to PC only while the app is focused: Android 10+ limit) |
+| SMS read and send | Implemented |
+| MMS | **Partial** - never sent through a real carrier |
+| Calls (history, dial, answer, mute) | **Partial** - declining a call is best-effort on Android |
+| Call audio on the PC (Bluetooth) | **Experimental** |
+| Screen mirroring with mouse/keyboard control | Implemented (needs an unlocked phone and a consent tap each time) |
+| Per-app streaming | **Experimental** |
+| Screen sync / smart display-off | **Partial** - rotation sync not implemented; some hardware paths unverified |
+| Phone camera as a webcam (v4l2loopback) | **Partial** - no automated test of the video sink |
+| Self-hosted relay (use away from home) | **Partial** - tested on loopback only, not across the internet |
+| Mount the phone's files on the PC (FUSE) | **Partial** |
+| Join the phone's hotspot from the PC | **Partial** - a real access point was never exercised |
+| Phone controls the PC (shell, files, screen, input) | Implemented - off by default, approval on the PC, one hour at most |
+| Security dashboards, signed audit log, per-feature permissions | Implemented |
+| Android portrait layout and TalkBack support | **Not tested** on a device |
+| The shrunk (R8) release APK | **Not tested** on a device - see `docs/DEVICE_SMOKE_TEST.md` |
+| iPhone app, screen-rotation sync, localisation | Not implemented |
 
 ## Screenshots
 _Screenshots will be added here. They must be real captures of the running apps._

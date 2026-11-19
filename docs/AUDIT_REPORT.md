@@ -1,5 +1,7 @@
 # PhoneBridge — Project Audit Report
 
+> **Point-in-time report (2026-11-19, first audit).** Sections 1-22 describe the project *as audited*; several findings (no version control, debug-signed release, no license, stale docs) have since been fixed. See Appendices B and C and `docs/PROJECT_REPORT.md` / `docs/RELEASE_READINESS.md` for the current state.
+
 | | |
 |---|---|
 | **Audit date** | 2026-11-19 |
@@ -546,7 +548,7 @@ Sections above describe the project **as audited**; this table records what was 
 | Issue | Result | Verification |
 |---|---|---|
 | ISSUE-01 no VCS | **Fixed locally**: `git init`, `.gitignore`, first commit (`cfcebf8`). No remote added (your decision). | `git log` |
-| ISSUE-02 / S-1 debug-signed release | **Fixed**: new 4096-bit release keystore in `android/keystore/` (untracked), `build.gradle.kts` reads `android/keystore.properties`, warns and falls back to debug if missing. | `apksigner verify`: signer `CN=PhoneBridge`, not the debug cert |
+| ISSUE-02 / S-1 debug-signed release | **Fixed**: new 4096-bit release keystore in `android/keystore/` (untracked; later moved to `~/.config/phonebridge-android-release/`, see `docs/SIGNING.md`), `build.gradle.kts` reads `android/keystore.properties`, warns and falls back to debug if missing. | `apksigner verify`: signer `CN=PhoneBridge`, not the debug cert |
 | ISSUE-03 stale docs | **Fixed**: README status/keystore/test sections, RELEASE_NOTES 1.4.0, SECURITY.md test count. | read-back |
 | ISSUE-04 UI tests fail without qrcode | **Fixed**: `qr.py` imports `qrcode` lazily; `tools/run_tests.sh` builds a venv from requirements. | strict run: 692 passed, 0 failed (PC) |
 | ISSUE-05 silent skips | **Fixed**: `PHONEBRIDGE_STRICT=1` (default in `run_tests.sh`) turns SKIP into FAIL. Kotlin tests re-run with Gradle visible: audit 43, interop 18, sync 9, mms 12 passed. | runs above |
@@ -557,7 +559,7 @@ Sections above describe the project **as audited**; this table records what was 
 | ISSUE-11 / S-6 env leak to shell | **Fixed**: `PHONEBRIDGE_*` stripped from the phone-controlled shell's environment. | code; no dedicated test added |
 | ISSUE-15 clutter | **Mitigated**: ignored by `.gitignore` (files not deleted). | |
 
-**Not fixed — needs your decision or hardware:**
+**Not fixed at that moment — needs your decision or hardware** (several of these were resolved later: the key was moved, a license was chosen, version control was added; see Appendix C and `docs/RELEASE_READINESS.md`):
 * **Push to a remote** (ISSUE-01 second half) and **moving `release.key` offline** (S-12): outward-facing / your secrets. **Back up `android/keystore/` and `keystore.properties`** — they are untracked.
 * Installing the new release APK over an existing debug-signed install requires uninstalling first (Android signature rule), which drops the pairing. The debug build is unchanged, so your current workflow is not affected.
 * ISSUE-07 on-device check of portrait + TalkBack (see above), ISSUE-08 splitting the large files, ISSUE-12 R8 (can't be validated without on-device testing), ISSUE-10 per-session PC-side approval (product decision), ISSUE-14 auto-mirror setting, ISSUE-16/17 (need hardware / a crash-consistency test), `gradlew` wrapper, CI, packaging, independent crypto review, MMS/relay/AP real-world validation, rotation sync.
@@ -569,5 +571,5 @@ Sections above describe the project **as audited**; this table records what was 
 | ISSUE-10 / S-2 PC control without approval on the PC | **Fixed.** A phone can never enable it. A request while off raises a prompt on the PC (Deny / 15 min / 1 hour, default Deny, 60 s timeout = refused); hard 1-hour ceiling (`PC_CONTROL_MAX_SECONDS`, env var can only lower it); red banner naming the phone with minutes left and **Revoke now**; revoke closes a running shell immediately, expiry within ~5 s; refusal/revoke gives a 2-minute cooldown (no prompt spam); audit-ledger records `pc_control.requested/approved/refused/revoked/expired`. | `test_pc_control` 27/27 (grant, clamp, refusal, cooldown, revoke closes shell in < 3 s), `test_pc_control_ui` 10/10. **Not covered:** the real Adw dialog in `app.py` (needs the full app) and the audit records are not asserted by a test |
 | Clipboard.kt `StaticFieldLeak` | **Investigated, not a leak.** The static `overlay` view uses the application context and is always cleared by `remove()` (focus or 800 ms fallback). Documented and suppressed. | lint: 39 -> 38 warnings. No Android unit-test infrastructure exists, so no automated test was added |
 | R8 smoke test | **Checklist written, not performed** (`docs/DEVICE_SMOKE_TEST.md`) | NOT TESTED |
-| Signing backup | Unchanged. **Only one encrypted off-machine backup exists (the Mi A3).** `~/phonebridge-backup-passphrase.txt` still exists on the PC and must not be deleted until the passphrase is stored and verified elsewhere | |
+| Signing backup | Unchanged. **Only one encrypted off-machine backup exists (the Mi A3).** the passphrase for it must be stored safely elsewhere before any plaintext copy is deleted| |
 | Repository recheck | working tree, all history, author metadata, personal paths, secrets, signing files, `.gitignore`, CI re-scanned - see `docs/GITHUB_PUBLICATION_CHECKLIST.md` | |

@@ -1,6 +1,6 @@
 # GitHub publication checklist
 
-Nothing has been created, pushed or published. The clean local history **has been applied** (section B). Status: PASS / FAIL / WARNING / NOT TESTED / TODO.
+Nothing has been created, pushed or published. The clean local history **has been applied and verified** (section B, section I). A later documentation-only correction pass (2026-11-19) fixed outdated license, key-location, test-count and feature-status statements, added `*.pem`, `*.key` and `*.bundle` to `.gitignore`, and generalised backup/passphrase locations so the public docs do not reveal them. Status: PASS / FAIL / WARNING / NOT TESTED / TODO.
 
 ## A. Decisions recorded
 | Item | Value | Status |
@@ -29,10 +29,10 @@ Irreversible part: only step 4 (replacing `.git`); it is reversible while the ba
 | Tracked files contain no `.jks/.keystore/.p12/.pem/.key/.env/.apk/.aab/.enc/.log/.db/.tar/.zip` | PASS |
 | Same file types never present in any commit | PASS |
 | Private-key blocks / cloud, GitHub, Slack, Google, OpenAI-style tokens / `password=`-style literals, current tree and all history | PASS - regex scan; **limitation:** gitleaks/trufflehog not installed, no entropy scanning |
-| Signing key, `keystore.properties`, backup passphrase | PASS - not in the repository; live in `~/.config/phonebridge-android-release/` and `~/phonebridge-backup-passphrase.txt` |
+| Signing key, `keystore.properties`, backup passphrase | PASS - not in the repository; the key and properties live in `~/.config/phonebridge-android-release/`; the passphrase is stored outside the repository |
 | `build.gradle.kts` contains only property names, never values | PASS |
 | Personal data in working tree (paths, e-mail, phone serial) | PASS |
-| Personal data in old history | WARNING until step B is done: `/home/<user>/projects/phonebridge/...` in `PROJECT_AUDIT_REPORT.md` (2 lines) in 6 old commits; e-mail in commit metadata of all commits |
+| Personal data in history | PASS - cleaned by step B (completed locally): 0 hits for the personal e-mail, home-directory paths or phone serial in any of the 12 commits' contents or metadata |
 | `.gitignore` (keys, properties, env, builds, IDE, logs, backups, passphrases) | PASS |
 | CI workflow | WARNING: read-only permissions, only `actions/*` and `gradle/actions` (official), secrets only in the tag-triggered `release` job with a protected environment; **never executed**. Actions are pinned to major versions, not commit SHAs |
 | Third-party asset/icon provenance | NOT TESTED |
@@ -40,7 +40,7 @@ Irreversible part: only step 4 (replacing `.git`); it is reversible while the ba
 ## D. Tests and builds (latest run)
 | Item | Status |
 |---|---|
-| PC tests, strict, 41 files | PASS - 813 checks, 0 failed, 0 skipped |
+| PC tests, strict, 40 test files | PASS - 813 checks, 0 failed, 0 skipped |
 | Android lint | PASS - 0 errors, 38 warnings |
 | Debug APK, release APK, AAB | PASS |
 | apksigner / AAB signer / fingerprint `10:EE:C5:7A:...:DA:9B:F9` | PASS (unchanged) |
@@ -50,13 +50,13 @@ Irreversible part: only step 4 (replacing `.git`); it is reversible while the ba
 | Approval dialog (`app.py`), CI workflow, bandit/shellcheck, Android 13-16, TalkBack | NOT TESTED |
 
 ## E. Signing backup status
-Only **one** encrypted off-machine backup exists (Mi A3, `/sdcard/PhoneBridgeBackup/`). A second, on different hardware, is still required. `~/phonebridge-backup-passphrase.txt` must stay until you have stored the passphrase elsewhere and tested a restore.
+Only **one** encrypted off-machine backup exists (on a separate device). A second, on different hardware, is still required. Keep any plaintext copy of the backup passphrase until it is stored safely elsewhere (password manager + paper) and a restore has been tested, then delete the plaintext copy.
 
 ## F. Remaining security issues
 Play Protect may block the sideloaded APK (see `docs/TROUBLESHOOTING.md`); R8 build never executed on a device; targetSdk 29; `BootReceiver` exported; PC-control approval dialog untested; single key backup; no independent human audit of SPAKE2/handshake; CI untested.
 
 ## G. Files published / excluded
-Published: all git-tracked files (about 225). Excluded: `dist/`, build outputs, keystores/properties/passphrases, venvs, logs, IDE files, `*.tar.gz`. Release artifacts (APK/AAB) are **not** attached anywhere until you approve.
+Published: all git-tracked files (224 at the time of writing). Excluded: `dist/`, build outputs, keystores/properties/passphrases, venvs, logs, IDE files, `*.tar.gz`. Release artifacts (APK/AAB) are **not** attached anywhere until you approve.
 
 ## H. Exact publication commands (run only after final approval)
 ```sh

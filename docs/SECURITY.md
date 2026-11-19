@@ -1,7 +1,9 @@
 # PhoneBridge security report
 
 **PhoneBridge is not "completely secure" or "unhackable".** This lists what exists and is tested, what does not, and the
-assumptions it rests on. Test counts are real runs of `linux/tests/run_all.py`.
+assumptions it rests on.
+
+**Evidence labels used below.** *Automated* = reproducible with `tools/run_tests.sh` (latest run 2026-11-19: 813 checks across 40 test files, 0 failed, 0 skipped; per-file counts quoted in the tables below are from earlier runs and may be lower than today's). *Author-reported hardware result* = obtained on the author's Xiaomi Mi A3 (LineageOS, Android 17) in earlier sessions; the logs are not in this repository and these results were **not re-run** during the 2026-11-19 audit. *AI-assisted review* = a read-only review by an AI model, not a human security audit. Anything not labelled should be treated as unverified.
 
 ## Architecture
 
@@ -34,20 +36,20 @@ Dashboards: PC "Security" page, Android "Security" tab.   No cloud, no blockchai
 | Fuzzing and static analysis | Parser fuzzing (handshake frames, envelopes, framing, UDP, pairing hello, manifests, paths, file offers) and a live-server fuzz (330 hostile connections, then a legitimate phone must still be served); Bandit (0 high/medium findings) and Android lint (security findings fixed: certificate-pinning trust manager, broadcast receiver); the fuzzers found and I fixed three real bugs | test_fuzz_quick, tests/fuzz_protocol.py |
 | Advanced | Forward secrecy, rotation, pinning, downgrade protection, **signed updates** (release key generated and its public half pinned; `phonebridge.updates check <https/file URL>` fetches, verifies the signature against the pinned key, refuses downgrades/replays, downloads and hash-checks every artifact, installs nothing; `tools/publish_release.py` builds + signs a release; verified end to end on a real staged 1.4.0 release), **dependency scanning** (`tools/audit_dependencies.py` against OSV), log hygiene check (no keys/content in logs) | test_updates, test_log_hygiene |
 
-## Measured cost (`tools/bench.py`, this laptop, loopback)
+## Measured cost (`tools/bench.py`, this laptop, loopback) - author-reported, not re-run
 
 handshake 1.4 ms CPU · reconnect (TLS 1.3 + handshake + first round trip) 32 ms · small control frame 6.7 µs ·
 AES-256-GCM 250 MB/s · 64 MiB encrypted file transfer 63 MB/s (faster than the Wi-Fi link) · ledger append 0.2 ms.
 Re-verifying the ledger caches signature checks, so the dashboard stays fast as the log grows.
 
-## Dependency scan (2026-11-13)
+## Dependency scan (2026-11-13) - superseded by a 2026-11-19 re-run (7 packages, no known vulnerabilities in OSV)
 
 `python3 tools/audit_dependencies.py` → **no known vulnerabilities** for the installed app's venv (cryptography 50.0.2,
 pillow 13.0.0, qrcode, PyGObject) and the Android libraries (BouncyCastle upgraded 1.79 → 1.87 because of five advisories;
 zxing, androidx.core). The system Python's distro packages are older and are flagged by version, but the app does not use them.
 Only package names and versions are ever sent, and only when you run the tool.
 
-## Independent review (fresh-context reviewer, read-only)
+## Review by a fresh-context AI reviewer (read-only) - AI-assisted, NOT a human audit
 
 A reviewer with no knowledge of how the code was written audited the handshake, transport, file/path handling, the Android
 permission gate and the security modules. **Cryptographic core (handshake, key schedule, rekey, data keys): no flaw found.**
@@ -67,14 +69,14 @@ Findings in the surrounding code, and what was done:
 | 10 | Rotated-away phone identity key honoured forever | low | **Fixed** (7-day grace period) |
 | 11 | Smaller: secrets files briefly world-readable; USB tunnel throttle (loopback) lets a local user cut off the USB phone; huge `size` overflow; docker ids starting with `-` | low | **Fixed** (0600 from creation; loopback exempt from throttle; overflow-safe check; id validation). **Not changed:** `device.info_request` and `relay.config` skip the phone's permission gate (metadata only; TLS pinning still holds); `remove_stale_pairings` removes any pairing with the same phone name (needs the user to approve a new pairing first). |
 | 12 | "Join phone hotspot from this PC" ran `nmcli … password <PW>`: the Wi-Fi password was visible in `ps` to every local user, and the process was never reaped | low | **Fixed** (`wifi_join.py`: profile created over NetworkManager's D-Bus API, activated with `nmcli connection up id`; `tests/test_wifi_join.py`, including a real NetworkManager round trip. Joining a real access point was **not** exercised) |
-| 13 | A PC app killed while the phone panel was powered off left the phone dark until the app was started again | low | **Fixed** (detached watchdog, `screensync/display_watchdog.py`; hardware: panel back 1.4 s after `kill -9`; `tests/test_display_watchdog.py`) |
+| 13 | A PC app killed while the phone panel was powered off left the phone dark until the app was started again | low | **Fixed** (detached watchdog, `screensync/display_watchdog.py`; hardware, author-reported: panel back 1.4 s after `kill -9`; `tests/test_display_watchdog.py`) |
 
 Regression tests for all of these: `tests/test_audit_fixes.py` (31), `test_udp_video.py` §5, `test_fuzz_quick.py`.
 
 ## Not implemented / limits (be aware)
 
 * **SPAKE2 pairing (v4):** the PC and Android app speak it (checked against each other in `test_spake2`, with the real Kotlin
-  compiled on the JVM) and **it was run on the real Mi A3 (2026-11-13)**: PIN pairing over the USB tunnel, PIN pairing over Wi-Fi with no tunnel (the phone found the PC by broadcast), a wrong PIN refused on the phone and counted once on the PC, both followed by an authenticated session. The PC's P-256 arithmetic is Python: secret-scalar
+  compiled on the JVM) and **it was run on the real Mi A3 (2026-11-13; author-reported, not re-run in the 2026-11-19 audit)**: PIN pairing over the USB tunnel, PIN pairing over Wi-Fi with no tunnel (the phone found the PC by broadcast), a wrong PIN refused on the phone and counted once on the PC, both followed by an authenticated session. The PC's P-256 arithmetic is Python: secret-scalar
   multiplications use OpenSSL for the generator and otherwise a blinded, uniform-operation Montgomery ladder, which mitigates
   timing leaks but is not constant-time at the instruction level (a one-shot, 60 s, 3-attempt exchange; not a general-purpose EC library). The old HMAC proof helpers remain in `crypto.py` but are no longer used by pairing. The USB pairing route needs adb and USB debugging, like the USB link.
 * **Release key:** the signing key was generated at `~/.config/phonebridge-release/release.key` (0600) and its public half is
@@ -99,7 +101,7 @@ Regression tests for all of these: `tests/test_audit_fixes.py` (31), `test_udp_v
   against file theft and backups, not malware running as you. Python cannot zero key bytes.
 * **Screen mirroring needs an unlocked phone** (Android shows its consent dialog behind the lock screen).
 
-## Verified on the real phone (Xiaomi Mi A3, Android 17)
+## Author-reported hardware results (Xiaomi Mi A3, Android 17) - not re-run in the 2026-11-19 audit
 
 Pairing (v4: identities exchanged), authenticated session over the **USB tunnel** and over Wi-Fi, info, clipboard, a 3 MB push
 (sha256 verified) and a pull; **screen mirroring over USB (TCP)**; the phone's permission manager (an "Ask" prompt appeared as
@@ -124,4 +126,4 @@ changed a device record (now atomic writes + locked updates), and a replay that 
 ## How to re-run everything
 
 `python3 linux/tests/run_all.py` (use a venv with `fusepy` for test_phone_fs; GUI tests run under `xvfb-run`).
-Latest audit run (2026-11-19, PC side): 652 checks passed across 39 files; the Kotlin-dependent tests and the FUSE test were skipped in that environment. Use `tools/run_tests.sh` (skips count as failures). Not covered by automation: the live phone (see below).
+Latest run (2026-11-19, PC side, `tools/run_tests.sh`, strict): **813 checks across 40 test files, 0 failed, 0 skipped** (includes the Kotlin harnesses). Not covered by automation: the live phone, the PC approval dialog, and the R8 release build.

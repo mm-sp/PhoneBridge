@@ -6,7 +6,7 @@ Requirements: JDK 17, Android SDK (platform 35, build-tools 34+), Gradle 8.14.x 
 cd android
 gradle :app:assembleDebug        # debug APK, debug key
 gradle :app:lintDebug
-gradle :app:assembleRelease      # needs android/keystore.properties or PHONEBRIDGE_* env vars; R8 + resource shrinking on
+gradle :app:assembleRelease      # needs ~/.config/phonebridge-android-release/keystore.properties or PHONEBRIDGE_* env vars; R8 + resource shrinking on
 gradle :app:bundleRelease        # .aab
 ```
 Or everything with checks and checksums: `tools/release.sh` (output in `dist/<version>/`).

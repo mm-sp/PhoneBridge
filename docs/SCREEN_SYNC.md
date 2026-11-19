@@ -21,7 +21,7 @@ app (hidden API, shell privilege), but `cmd display power-off/power-reset` is th
 the system shell, so the PC does it over ADB, and we copy scrcpy's safety idea: a **pending-restore marker** on disk
 (`~/.config/phonebridge/screensync_pending.json`) that the next start honours, plus a phone-side watchdog.
 
-### Hardware result (Xiaomi Mi A3, LineageOS, Android 17 / API 37, 2026-11-15)
+### Hardware result (Xiaomi Mi A3, LineageOS, Android 17 / API 37, 2026-11-15) - author-reported, not re-run in the 2026-11-19 audit
 * `cmd display power-off 0` → `mState=OFF` while `mWakefulness=Awake`; `power-reset 0` → `mState=ON`.
 * With mirroring running and the panel forced off, opening Settings on the dark phone produced +55 frames
   (~120 kB/s) on the PC: **the capture keeps streaming real content with the panel off.**

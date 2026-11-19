@@ -3,7 +3,7 @@
 ## Linux app
 Requirements: Python 3.10+, GTK 4 and libadwaita with the PyGObject bindings (Debian/Ubuntu: `python3-gi gir1.2-gtk-4.0 gir1.2-adw-1`), GStreamer plugins for H.264 decoding, `adb` (optional: USB link and screen sync), `v4l2loopback` (optional: webcam), Avahi (optional: mDNS).
 ```sh
-git clone <repository-url> && cd PhoneBridge-linux-src
+git clone https://github.com/mm-sp/PhoneBridge.git && cd PhoneBridge
 ./packaging/install.sh          # user-local venv, launcher, desktop entry; no root
 phonebridge                     # or start it from the app menu
 ./packaging/uninstall.sh        # removes what install.sh created
