@@ -10,6 +10,7 @@
 | Remote control from the PC does nothing | Enable the PhoneBridge accessibility service on the phone. Note: `adb shell am force-stop dev.phonebridge` disables it. |
 | Phone says PC control is off | "Allow PC control" on the PC's Device page is off or timed out (default 60 min); tick it again. |
 | Phone->PC clipboard not syncing | Android 10+ only allows the focused app to read the clipboard; open PhoneBridge on the phone. |
+| App crashes at start with `ValueError: Namespace Gst not available` | The GStreamer GObject bindings are missing: install `gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0` (and the plugin packages listed in `docs/INSTALLATION.md`). |
 | Webcam not listed | Load `v4l2loopback` (see `packaging/setup-webcam.sh`). |
 | Android notifications/permission prompts missing | Notifications for PhoneBridge are disabled: "ask" prompts then count as deny. |
 | GUI tests fail with missing `qrcode` | Use `tools/run_tests.sh`, which builds a venv from `requirements.txt`. |

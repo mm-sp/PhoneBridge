@@ -1,7 +1,7 @@
 # Installation
 
 ## Linux app
-Requirements: Python 3.10+, GTK 4 and libadwaita with the PyGObject bindings (Debian/Ubuntu: `python3-gi gir1.2-gtk-4.0 gir1.2-adw-1`), GStreamer plugins for H.264 decoding, `adb` (optional: USB link and screen sync), `v4l2loopback` (optional: webcam), Avahi (optional: mDNS).
+Requirements: Python 3.10+, GTK 4 and libadwaita with the PyGObject bindings (Debian/Ubuntu: `python3-gi gir1.2-gtk-4.0 gir1.2-adw-1`), **GStreamer with its GObject bindings (required: the app does not start without them; Debian/Ubuntu: `gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav`)**, `adb` (optional: USB link and screen sync), `v4l2loopback` (optional: webcam), Avahi (optional: mDNS).
 ```sh
 git clone https://github.com/mm-sp/PhoneBridge.git && cd PhoneBridge
 ./packaging/install.sh          # user-local venv, launcher, desktop entry; no root

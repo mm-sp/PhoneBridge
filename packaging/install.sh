@@ -9,7 +9,9 @@ BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
 echo "==> Checking for GTK4/libadwaita system libraries"
 python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); from gi.repository import Gtk, Adw" 2>/dev/null \
-  || { echo "ERROR: python3-gobject with GTK4 + libadwaita bindings not found. Install your distro's gtk4/libadwaita + python3-gobject packages first." >&2; exit 1; }
+  || { echo "ERROR: python3-gobject with GTK4 + libadwaita bindings not found. Install your distro's gtk4/libadwaita + python3-gobject packages first (Debian/Ubuntu: python3-gi gir1.2-gtk-4.0 gir1.2-adw-1)." >&2; exit 1; }
+python3 -c "import gi; gi.require_version('Gst', '1.0'); gi.require_version('GstApp', '1.0'); from gi.repository import Gst" 2>/dev/null \
+  || { echo "ERROR: GStreamer GObject bindings not found; PhoneBridge cannot start without them. Install them first (Debian/Ubuntu: gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav)." >&2; exit 1; }
 
 echo "==> Creating virtualenv at $VENV_DIR"
 mkdir -p "$(dirname "$VENV_DIR")"

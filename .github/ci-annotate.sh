@@ -5,5 +5,6 @@
 LOG="${1:?log file}"; TITLE="${2:-CI}"
 [ -f "$LOG" ] || { echo "::error title=$TITLE::no log file $LOG"; exit 0; }
 esc() { sed -e 's/%/%25/g' -e 's/\r//g' | cut -c1-300; }
-{ grep -nEi "FAILED|What went wrong|Caused by|Could not|licen[sc]e|not found|No such|Traceback|Error|ModuleNotFound|exit code|exit=|\bFAIL\b" "$LOG" | head -9
+# case-sensitive on purpose: test summaries say "0 failed" on every passing line; we only want real failures
+{ grep -nE "^FAIL|FAILED|What went wrong|Caused by|Could not|licen[sc]e|not found|No such|Traceback|Error|ModuleNotFound|ValueError|exit code|exit=" "$LOG" | grep -v "^[0-9]*:ok " | head -9
   tail -n 3 "$LOG" | sed 's/^/last: /'; } | while IFS= read -r line; do printf '::error title=%s::%s\n' "$TITLE" "$(printf '%s' "$line" | esc)"; done
