@@ -1,6 +1,6 @@
 # GitHub publication checklist
 
-Nothing has been created, pushed or published. Status: PASS / FAIL / WARNING / NOT TESTED / TODO.
+Nothing has been created, pushed or published. The clean local history **has been applied** (section B). Status: PASS / FAIL / WARNING / NOT TESTED / TODO.
 
 ## A. Decisions recorded
 | Item | Value | Status |
@@ -14,7 +14,7 @@ Nothing has been created, pushed or published. Status: PASS / FAIL / WARNING / N
 | Noreply commit identity | `62277083+mm-sp@users.noreply.github.com` (GitHub's documented `<id>+<username>@users.noreply.github.com` format, id from the public API) | PASS - not guessed |
 | Screenshots | placeholders only in README | TODO (needs real captures) |
 
-## B. Clean-history plan (nothing executed on this repository yet)
+## B. Clean-history cleanup (APPLIED locally; not pushed)
 Why: all 8 commits carry the personal e-mail in author/committer metadata; `/home/<user>/...` paths exist in the old audit report in 6 early commits; and one intermediate commit (the first version of this checklist) quoted the e-mail address in file contents. The phone serial never appears in any commit's contents. The current tree contains none of these.
 1. Keep the current repository as a backup (`cp -a PhoneBridge-linux-src PhoneBridge-linux-src.pre-publish-backup`, or `git bundle create ../phonebridge-pre-publish.bundle --all`).
 2. Rebuild, in a **new** directory, one commit per existing commit, same order, same messages (including the `Co-Authored-By` trailers), same dates (note: dates carry the `+0530` timezone), with author = committer = `mm-sp <62277083+mm-sp@users.noreply.github.com>`, and personal data scrubbed from file contents: the home-directory prefix is replaced by the placeholder `/home/<user>`, the personal e-mail address by `<redacted-email>`, the phone's adb serial by `<phone-serial>`. The rebuild script is a throw-away helper kept outside the repository.
@@ -72,3 +72,10 @@ git push origin v1.4.0
 # 3. release page: upload dist/1.4.0/phonebridge-1.4.0.apk + SHA256SUMS (not the debug APK, not the mapping file)
 ```
 Authenticate with a GitHub token or SSH key yourself; never paste a token into a chat or a file in the repository.
+
+## I. Cleanup result (2026-11-19)
+Applied: the repository's `.git` was replaced by a rebuilt history. 11 commits (the original 10 plus the NOTICE correction), all authored and committed by `mm-sp <62277083+mm-sp@users.noreply.github.com>`, same order, messages and dates (dates carry the +0530 timezone). Verified: no personal e-mail, home-directory path or phone serial in any commit's contents or metadata; no signing-file types in any commit; every tracked file byte-identical to the pre-cleanup working tree; `git fsck --strict` clean; LICENSE sha256 `cfc7749b...523d30`; tests 813/0; APK/AAB rebuilt; release certificate unchanged.
+Private rollback material (contains the old identity - **never publish or upload these**), in the parent folder of the repository:
+* `phonebridge-pre-publish-20261119.bundle` - git bundle of the original 10 commits (verified: clones to the same HEAD).
+* `phonebridge-git-old-pre-publish/` - the complete old `.git` directory (all 11 old commits including the NOTICE fix).
+Restore the old history: `cd PhoneBridge-linux-src && mv .git ../phonebridge-git-new && mv ../phonebridge-git-old-pre-publish .git`, or `git clone phonebridge-pre-publish-20261119.bundle restored`.
