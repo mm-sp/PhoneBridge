@@ -27,3 +27,15 @@ dist/
 *.iml
 .vscode/
 local.properties
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+.pytest_cache/
+.gradle/
+captures/
+*passphrase*
+backups/
+android/app/release/
+android/app/debug/

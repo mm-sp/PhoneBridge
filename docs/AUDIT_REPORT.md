@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Audit date** | 2026-11-19 |
-| **Scope** | `/home/<user>/projects/phonebridge/PhoneBridge-linux-src` (the app), plus `PhoneBridge-Research/` (docs only) and two backup tarballs |
+| **Scope** | the app directory (this repository), plus a separate `PhoneBridge-Research/` folder (docs only, not in this repository) and two local backup tarballs (not in this repository) |
 | **Method** | Static reading of source, config, docs and build files; a real run of the existing PC test-suite; targeted `grep` scans. No project file was modified (test run used a scratch `HOME`, no D-Bus, `PYTHONDONTWRITEBYTECODE=1`; the real `~/.config/phonebridge` was verified untouched afterwards). |
 | **Not done** | No Gradle/Android build was run, no phone was connected, no GUI was visually inspected, no network/OSV dependency scan was run (that tool sends package names to an external service; not run without your approval). |
 | **Conventions** | **Verified** = seen in code or produced by a command I ran. **Suspected** = inferred from code, not reproduced. **Docs claim** = stated in docs, not independently re-verified by me. |
@@ -194,7 +194,7 @@ PhoneBridge-linux-src/
 ├── packaging/          install.sh, uninstall.sh, setup-webcam.sh
 └── tools/              sign_release.py, publish_release.py, audit_dependencies.py, bench.py
 ```
-Outside the app dir (`/home/<user>/projects/phonebridge/`): `PhoneBridge-Research/` (9 markdown analyses of Windows Phone Link and the design — no code), `ios-removed-backup.tar.gz`, `phonebridge-src-backup-20261117-2232.tar.gz`.
+Outside the repository (in its parent folder): `PhoneBridge-Research/` (9 markdown analyses of Windows Phone Link and the design — no code), `ios-removed-backup.tar.gz`, `phonebridge-src-backup-20261117-2232.tar.gz`.
 
 **Clutter that should not be in the tree (verified):** `linux/phonebridge.egg-info/`, `__pycache__/` dirs, `android/build/`, `android/.gradle/`, `android/.kotlin/`, `android/local.properties` (absolute SDK path; git-ignored by `.gitignore`, but there is no git).
 
