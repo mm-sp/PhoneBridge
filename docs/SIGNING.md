@@ -7,7 +7,8 @@ PhoneBridge's identity is three things that must never change for direct-distrib
 | Application ID | `dev.phonebridge` (do not change without a deliberate migration; users would have to reinstall) |
 | Release certificate SHA-256 | `10:EE:C5:7A:52:F5:C2:01:CF:C6:71:49:6B:78:7D:48:49:9C:D8:DB:14:A2:12:2D:D6:32:2B:4E:62:DA:9B:F9` |
 | Key | RSA 4096, SHA384withRSA, alias `phonebridge`, valid until 2051-11-13, subject `CN=PhoneBridge, O=PhoneBridge personal` |
-| Keystore (local) | `android/keystore/phonebridge-release.jks`, credentials in `android/keystore.properties` (both git-ignored) |
+| Keystore (local) | `~/.config/phonebridge-android-release/phonebridge-release.jks` (dir 700, files 600), credentials in `keystore.properties` in the same directory. Outside the repository. Override with `PHONEBRIDGE_SIGNING_PROPERTIES` or the `PHONEBRIDGE_KEYSTORE*` variables. |
+| Backups | #1 encrypted file on the Mi A3: `/sdcard/PhoneBridgeBackup/phonebridge-signing-*.tar.gz.enc` (made 2026-11-19, verified by decrypting a copy pulled back from the phone). **#2 not made yet - required.** The passphrase is in `~/phonebridge-backup-passphrase.txt`: copy it to a password manager/paper, then delete that file. |
 
 Android only installs an update over an existing app when it is signed with the **same** certificate. If this key is
 lost, every user must uninstall (losing their pairing) before they can install a differently signed build.
@@ -34,9 +35,8 @@ Decrypt with `openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in <backup> | ta
 `keystore.properties` back (fix `storeFile`), then run `tools/release.sh` and compare the printed certificate SHA-256 with
 the value above.
 
-## Moving the key off the development machine
-Not done automatically. After two verified backups: move `android/keystore/` to encrypted external storage or
-`~/.config/phonebridge-android-release/`, set `storeFile=` in `keystore.properties` (or `PHONEBRIDGE_KEYSTORE`) to the new path.
+## Location
+The key was moved out of the repository on 2026-11-19 with only ONE verified backup (the phone). The key now exists in two places: this directory and the phone's encrypted backup. Make the second backup before relying on it.
 
 ## Google Play (two different identities)
 * **Upload key**: signs the `.aab` you upload. It may be this same key, but it is only used to authenticate uploads.

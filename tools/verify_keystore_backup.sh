@@ -8,6 +8,6 @@ PASSARG=(); [ -z "${PHONEBRIDGE_BACKUP_PASS:-}" ] || PASSARG=(-pass env:PHONEBRI
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT; chmod 700 "$TMP"
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 "${PASSARG[@]}" -in "$1" | tar -xz -C "$TMP"
 KS="$(ls "$TMP"/*.jks)"; PW="$(grep '^storePassword=' "$TMP/keystore.properties" | cut -d= -f2-)"; AL="$(grep '^keyAlias=' "$TMP/keystore.properties" | cut -d= -f2-)"
-GOT="$(keytool -list -v -keystore "$KS" -alias "$AL" -storepass "$PW" 2>/dev/null | sed -n 's/^ *SHA256: //p' | tr -d ':' | tr 'A-F' 'a-f')"
+GOT="$(keytool -list -v -keystore "$KS" -alias "$AL" -storepass "$PW" 2>/dev/null | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr 'A-F' 'a-f')"
 WANT="$(echo "$2" | tr -d ':' | tr 'A-F' 'a-f')"
 [ "$GOT" = "$WANT" ] && echo "OK: backup is readable and the fingerprint matches" || { echo "MISMATCH (got $GOT)" >&2; exit 1; }

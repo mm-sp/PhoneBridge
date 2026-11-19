@@ -21,11 +21,15 @@ android {
         versionName = "1.4.0"
     }
 
-    // Release signing: credentials live in android/keystore.properties (untracked). Without it the release build
-    // falls back to the debug key and says so, so a missing key can never be mistaken for a real release.
+    // Signing properties live OUTSIDE the repository: $PHONEBRIDGE_SIGNING_PROPERTIES, else
+    // ~/.config/phonebridge-android-release/keystore.properties, else (legacy) android/keystore.properties.
     val keystoreProps = Properties().apply {
-        val f = rootProject.file("keystore.properties")
-        if (f.exists()) f.inputStream().use { load(it) }
+        val candidates = listOfNotNull(
+            System.getenv("PHONEBRIDGE_SIGNING_PROPERTIES")?.let { File(it) },
+            File(System.getProperty("user.home"), ".config/phonebridge-android-release/keystore.properties"),
+            rootProject.file("keystore.properties"),
+        )
+        candidates.firstOrNull { it.exists() }?.inputStream()?.use { load(it) }
     }
     // Credentials come from environment variables (CI) or android/keystore.properties (local, untracked) - never from
     // this file. Variables: PHONEBRIDGE_KEYSTORE (path), PHONEBRIDGE_KEYSTORE_PASSWORD, PHONEBRIDGE_KEY_ALIAS,
@@ -49,7 +53,7 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release") ?: run {
-                logger.warn("WARNING: android/keystore.properties missing - release APK is signed with the DEBUG key")
+                logger.warn("WARNING: signing properties missing (see docs/SIGNING.md) - release APK is signed with the DEBUG key")
                 signingConfigs.getByName("debug")
             }
         }
