@@ -19,6 +19,9 @@ try:
 except ImportError:
     print("SKIP: fusepy not installed")
     raise SystemExit(0)
+except OSError as exc:   # fusepy is installed but the libfuse system library is missing (e.g. a bare CI runner)
+    print(f"SKIP: libfuse not available ({exc})")
+    raise SystemExit(0)
 if not os.path.exists("/dev/fuse"):
     print("SKIP: no /dev/fuse")
     raise SystemExit(0)

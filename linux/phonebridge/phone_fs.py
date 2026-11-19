@@ -176,6 +176,8 @@ class Mount:
             from fuse import FUSE
         except ImportError:
             return "Install the optional 'fusepy' package (pip install fusepy) to mount the phone as a folder"
+        except OSError as exc:   # fusepy is installed but the libfuse system library is not ("Unable to find libfuse")
+            return f"FUSE is not available on this system ({exc}). Install libfuse2 (or fuse3) to mount the phone as a folder"
         if self.mounted:
             return None
         self.path.mkdir(parents=True, exist_ok=True)
