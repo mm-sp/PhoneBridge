@@ -2,6 +2,22 @@ PhoneBridge
 Copyright 2026 Saiprakash Manepalli
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
-This product bundles or depends on third-party software under their own licenses, including BouncyCastle (MIT-style),
-zxing-android-embedded (Apache-2.0), AndroidX (Apache-2.0), cryptography (Apache-2.0/BSD), Pillow (HPND) and
-qrcode (BSD). Check each dependency's license before redistributing binaries.
+
+Third-party software (licenses read from package metadata / Maven POM files on 2026-11-19; check them again before
+redistributing binaries, and note that the list covers direct runtime dependencies and the main transitive ones only).
+
+Android app (bundled in the APK/AAB):
+  - Bouncy Castle bcprov-jdk18on 1.87        Bouncy Castle Licence (MIT-style)   https://www.bouncycastle.org/licence.html
+  - zxing-android-embedded 4.3.0             Apache License 2.0
+  - ZXing core 3.4.1 (transitive)            Apache License 2.0
+  - AndroidX core 1.13.1 (+ transitive)      Apache License 2.0
+  - Kotlin standard library 2.0.21           Apache License 2.0
+
+Linux app (installed separately with pip / the distribution; not bundled in this repository):
+  - cryptography                             Apache-2.0 OR BSD-3-Clause
+  - Pillow                                   MIT-CMU
+  - qrcode                                   BSD
+  - PyGObject (GTK 4 / libadwaita bindings)  LGPL-2.1-or-later
+  - fusepy (optional)                        ISC
+  - System libraries used at run time (GTK, libadwaita, GStreamer, FUSE, ...) are provided by your distribution under
+    their own licenses (mostly LGPL).
