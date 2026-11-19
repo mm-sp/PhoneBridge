@@ -552,10 +552,11 @@ Sections above describe the project **as audited**; this table records what was 
 | ISSUE-05 silent skips | **Fixed**: `PHONEBRIDGE_STRICT=1` (default in `run_tests.sh`) turns SKIP into FAIL. Kotlin tests re-run with Gradle visible: audit 43, interop 18, sync 9, mms 12 passed. | runs above |
 | ISSUE-06 per-message disk read | **Fixed**: gate re-reads the device file only when its mtime/size changed, so revoking still applies on the next message. (A first 1 s TTL version broke `test_pc_control`; replaced.) | `test_pc_control` 12/12 |
 | ISSUE-09 deps drift | **Fixed**: `fuse` and `test` extras in `pyproject.toml`. | |
+| ISSUE-10 / S-2 PC-control never expires | **Fixed (time limit)**: grant lasts 60 min by default (`PHONEBRIDGE_PC_CONTROL_MINUTES`), fail-closed for old settings, live shell/screen closed by a 5 s sweep, Device card shows minutes left. **Not done:** per-session approval prompt on the PC. | `test_pc_control` 16/16 (incl. expiry + live-shell close), `test_security` 72/72 |
 | ISSUE-11 / S-6 env leak to shell | **Fixed**: `PHONEBRIDGE_*` stripped from the phone-controlled shell's environment. | code; no dedicated test added |
 | ISSUE-15 clutter | **Mitigated**: ignored by `.gitignore` (files not deleted). | |
 
 **Not fixed — needs your decision or hardware:**
 * **Push to a remote** (ISSUE-01 second half) and **moving `release.key` offline** (S-12): outward-facing / your secrets. **Back up `android/keystore/` and `keystore.properties`** — they are untracked.
 * Installing the new release APK over an existing debug-signed install requires uninstalling first (Android signature rule), which drops the pairing. The debug build is unchanged, so your current workflow is not affected.
-* ISSUE-07 Android portrait/TalkBack, ISSUE-08 splitting the large files, ISSUE-12 R8 (can't be validated without on-device testing), ISSUE-10 PC-control expiry/approval (a product decision), ISSUE-14 auto-mirror setting, ISSUE-16/17 (need hardware / a crash-consistency test), `gradlew` wrapper, CI, packaging, independent crypto review, MMS/relay/AP real-world validation, rotation sync.
+* ISSUE-07 Android portrait/TalkBack, ISSUE-08 splitting the large files, ISSUE-12 R8 (can't be validated without on-device testing), ISSUE-10 per-session PC-side approval (product decision), ISSUE-14 auto-mirror setting, ISSUE-16/17 (need hardware / a crash-consistency test), `gradlew` wrapper, CI, packaging, independent crypto review, MMS/relay/AP real-world validation, rotation sync.

@@ -6,6 +6,7 @@ Run: `python3 tests/test_security.py`"""
 import asyncio
 import json
 import os
+import time
 import shutil
 import ssl
 import sys
@@ -282,7 +283,12 @@ async def server_tests(tmp):
           P.mode_of(pairing.PairedDevice.load(dev.fingerprint), "remote_control") == P.DENY)
     P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "remote_control", P.ALLOW)
     check("turning it on sets allow_pc_control", pairing.PairedDevice.load(dev.fingerprint).allow_pc_control is True)
+    _d = pairing.PairedDevice.load(dev.fingerprint)
+    check("...with a deadline about an hour away", _d.pc_control_until is not None and 3000 < _d.pc_control_until - time.time() <= 3600
+          and _d.pc_control_active())
+    check("mode_of is DENY once the deadline has passed", (setattr(_d, "pc_control_until", time.time() - 1) or P.mode_of(_d, "remote_control")) == P.DENY)
     P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "remote_control", P.DENY)
+    check("turning it off clears the deadline", pairing.PairedDevice.load(dev.fingerprint).pc_control_until is None)
     check("remote_control can't be 'ask'", _fails(lambda: P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "remote_control", P.ASK)))
 
     # unauthorized device / bad key

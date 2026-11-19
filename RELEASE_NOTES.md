@@ -9,6 +9,7 @@
   (`docs/SCREEN_SYNC.md`). Screen-rotation sync is **not** implemented.
 
 ### Changed
+- **"Allow PC control" now expires** (default 1 hour, `PHONEBRIDGE_PC_CONTROL_MINUTES`). Existing "on" settings count as off until you tick the box again; the Device card shows the minutes left. A running shell or screen view is closed when the time runs out.
 - Release APK is signed from `android/keystore.properties` (falls back to the debug key with a warning).
 - The phone-controlled PC shell no longer inherits `PHONEBRIDGE_*` environment variables.
 - "Allow PC control" is checked at most once per second per phone instead of on every message.

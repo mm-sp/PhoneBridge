@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import gi
 
@@ -37,7 +38,7 @@ class PcControl:
         self._frame_in_flight = False
         self._needs_reask = False
         self._terms: dict[str, TerminalSession] = {}  # one shell per phone
-        self._gate_cache: dict[str, tuple[tuple[int, int], bool]] = {}
+        self._gate_cache: dict[str, tuple[tuple[int, int], float | None]] = {}
 
         for type_, handler in {
             "pc.info_request": self._on_info,
@@ -59,6 +60,7 @@ class PcControl:
         }.items():
             server.on(type_, self._gated(handler))
         server.on_connection_change(self._on_connection_change)
+        loop.call_soon_threadsafe(loop.call_later, 5.0, self._sweep_expired)
 
     # ------------------------------------------------------------- helpers
 
@@ -73,11 +75,28 @@ class PcControl:
             return False
         hit = self._gate_cache.get(fingerprint)
         if hit and hit[0] == stamp:
-            return hit[1]
+            return hit[1] is not None and time.time() < hit[1]
         device = PairedDevice.load(fingerprint)
-        allowed = bool(device and device.allow_pc_control)
-        self._gate_cache[fingerprint] = (stamp, allowed)
-        return allowed
+        until = device.pc_control_until if device and device.allow_pc_control else None
+        self._gate_cache[fingerprint] = (stamp, until)
+        return until is not None and time.time() < until
+
+    def _revoke_live_sessions(self, fingerprint: str) -> None:
+        """Control was switched off or timed out: end the shell now (its output would otherwise keep flowing to the
+        phone with no further gated message) and the screen view."""
+        term = self._terms.pop(fingerprint, None)
+        if term is not None:
+            log.info("PC control no longer allowed: closing the phone's terminal")
+            term.close()
+        if self._stream_conn is not None and self._stream_conn.fingerprint == fingerprint:
+            GLib.idle_add(self._stop_screen)
+
+    def _sweep_expired(self) -> None:
+        """Every few seconds: close shells/screen of phones whose permission ran out while idle."""
+        for fp in list(self._terms) + ([self._stream_conn.fingerprint] if self._stream_conn else []):
+            if not self._pc_control_allowed(fp):
+                self._revoke_live_sessions(fp)
+        self._loop.call_later(5.0, self._sweep_expired)
 
     def _gated(self, handler):
         """Shell, files, input and screen view of this PC are off until the user enables
@@ -85,6 +104,7 @@ class PcControl:
 
         async def wrapper(conn: DeviceConnection, env) -> None:
             if not self._pc_control_allowed(conn.fingerprint):
+                self._revoke_live_sessions(conn.fingerprint)
                 await conn.send("control", "pc.status", {"denied": True, "message": "PC control is turned off for this "
                                                          "phone. On the PC: Device page → Allow PC control."})
                 return

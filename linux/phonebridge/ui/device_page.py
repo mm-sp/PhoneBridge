@@ -7,7 +7,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gtk  # noqa: E402
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from .. import pairing
 
@@ -50,7 +50,23 @@ class _DeviceCard:
 
         fresh = pairing.PairedDevice.load(self.device.fingerprint) or self.device
         permissions.set_mode(fresh, "remote_control", permissions.ALLOW if button.get_active() else permissions.DENY)
-        self.device.allow_pc_control = fresh.allow_pc_control
+        self.device.allow_pc_control, self.device.pc_control_until = fresh.allow_pc_control, fresh.pc_control_until
+        self._update_pc_control_label()
+
+    def _update_pc_control_label(self) -> None:
+        """Shows how long remote control stays on, and unticks the box once it has timed out."""
+        import time
+
+        d = self.device
+        if d.pc_control_active():
+            left = max(1, int((d.pc_control_until - time.time()) // 60) + 1)
+            self._pc_control.set_label(f"Allow PC control ({left} min left)")
+        else:
+            self._pc_control.set_label("Allow PC control")
+            if self._pc_control.get_active():
+                self._pc_control.set_active(False)   # toggled handler records the switch-off
+        widget = getattr(self, "widget", None)
+        return widget is None or widget.get_root() is not None   # stop the timer once the card has been removed
 
     def __init__(self, device: pairing.PairedDevice, on_forget, on_control, on_disconnect, on_hotspot=None, on_mount=None) -> None:
         self.device = device
@@ -86,11 +102,14 @@ class _DeviceCard:
         hero.append(text)
         actions = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, valign=Gtk.Align.CENTER)
         actions.append(self._disconnect_btn)
-        self._pc_control = Gtk.CheckButton(label="Allow PC control", active=device.allow_pc_control,
+        self._pc_control = Gtk.CheckButton(label="Allow PC control", active=device.pc_control_active(),
                                            tooltip_text="Let this phone use this PC's shell, files, screen view "
-                                                        "and keyboard/mouse. Off by default.")
+                                                        "and keyboard/mouse. Off by default and switches itself off after "
+                                                        "an hour (tick again to extend).")
         self._pc_control.connect("toggled", self._on_pc_control_toggled)
         actions.append(self._pc_control)
+        self._update_pc_control_label()
+        GLib.timeout_add_seconds(15, self._update_pc_control_label)
         actions.append(forget)
         hero.append(actions)
 

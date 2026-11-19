@@ -8,6 +8,7 @@ Run directly: `python3 tests/test_pc_control.py`
 import asyncio
 import os
 import ssl
+import time
 import sys
 import tempfile
 from pathlib import Path
@@ -45,7 +46,7 @@ async def main_async() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from _phone import new_identity, phone_connect
     ident = new_identity()
-    phone = pairing.PairedDevice("cafe", "Test Phone", os.urandom(32), allow_pc_control=True, identity_pub=ident.public_b64)
+    phone = pairing.PairedDevice("cafe", "Test Phone", os.urandom(32), allow_pc_control=True, pc_control_until=time.time() + 3600, identity_pub=ident.public_b64)
     phone.save()
 
     server = transport.ControlChannelServer(port=PORT)
@@ -80,6 +81,20 @@ async def main_async() -> int:
     check("denied with a pc.status message when allow_pc_control is off",
           denied.type == "pc.status" and denied.payload.get("denied") is True)
     phone.allow_pc_control = True
+    phone.pc_control_until = None
+    phone.save()
+    denied = await ask("pc.info_request")
+    check("a grant without a deadline (older versions) is treated as expired",
+          denied.type == "pc.status" and denied.payload.get("denied") is True)
+    phone.pc_control_until = time.time() + 3600
+    phone.save()
+    phone.pc_control_until = time.time() - 1
+    phone.save()
+    denied = await ask("pc.info_request")
+    check("an expired grant is refused on the very next message",
+          denied.type == "pc.status" and denied.payload.get("denied") is True)
+    check("pc_control_active() is False after the deadline", not phone.pc_control_active())
+    phone.pc_control_until = time.time() + 3600
     phone.save()
 
     print("1. device info")
@@ -133,6 +148,25 @@ async def main_async() -> int:
     await writer.drain()
     exit_env = await recv()
     check("closing ends the shell", exit_env.type == "pc.term_exit")
+
+    print("7. a running shell is closed by itself when the time limit runs out")
+    seq[0] += 1
+    writer.write(crypto.pack_frame(cipher.encrypt(Envelope("control", "pc.term_open", seq[0],
+                                                           {"cols": 80, "rows": 24, "new": True}).to_json())))
+    await writer.drain()
+    await asyncio.sleep(0.5)
+    phone.pc_control_until = time.time() - 1
+    phone.save()
+    ended = False
+    try:
+        for _ in range(60):
+            env = await asyncio.wait_for(recv(), 12)
+            if env.type == "pc.term_exit":
+                ended = True
+                break
+    except asyncio.TimeoutError:
+        pass
+    check("idle shell was closed within ~5 s of the deadline, with no further message from the phone", ended)
 
     writer.close()
     serve.cancel()

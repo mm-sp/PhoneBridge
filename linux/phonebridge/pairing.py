@@ -23,6 +23,15 @@ PROTOCOL_VERSION = 4   # v4: the PIN is verified with SPAKE2 (a PAKE) instead of
 MAX_FAILED_ATTEMPTS = 3
 DEVICES_DIR = Path.home() / ".config" / "phonebridge" / "devices"
 
+
+def pc_control_ttl_seconds() -> int:
+    """How long "Allow PC control" lasts once switched on: PHONEBRIDGE_PC_CONTROL_MINUTES (default 60, 1..1440)."""
+    try:
+        minutes = int(os.environ.get("PHONEBRIDGE_PC_CONTROL_MINUTES", "60"))
+    except ValueError:
+        minutes = 60
+    return max(1, min(1440, minutes)) * 60
+
 PLATFORMS = ("android", "ios")
 IDENTITY_GRACE_SECONDS = 7 * 24 * 3600   # how long a retired phone identity key keeps working after a rotation
 # Sidebar sections an iPhone can't back (iOS gives apps no access to SMS, calls, other apps'
@@ -115,6 +124,9 @@ class PairedDevice:
     # Shell / PC files / remote input / screen view from the phone. Off until the user
     # turns it on for this phone on the PC (device card toggle).
     allow_pc_control: bool = False
+    # Remote control is time-limited: it counts as on only until this Unix time (set when the user turns it on).
+    # A stored "on" with no deadline (older versions) is treated as expired - fail closed.
+    pc_control_until: float | None = None
     # "android" or "ios" (sent in the phone's pairing hello). iPhones lack SMS, calls,
     # notification access, screen capture and file browsing, so the UI hides those tabs.
     platform: str = "android"
@@ -128,6 +140,13 @@ class PairedDevice:
     pc_pub_acked: str | None = None
     # feature -> "allow" | "deny" | "ask" (security/permissions.py); missing features use the defaults.
     permissions: dict = field(default_factory=dict)
+
+    def pc_control_active(self, now: float | None = None) -> bool:
+        """True only while remote control is switched on AND its time limit has not run out."""
+        import time
+
+        return bool(self.allow_pc_control and self.pc_control_until is not None
+                    and (time.time() if now is None else now) < self.pc_control_until)
 
     def save(self) -> Path:
         DEVICES_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,6 +166,7 @@ class PairedDevice:
                     "last_lan_port": self.last_lan_port,
                     "cert_fingerprint": self.cert_fingerprint,
                     "allow_pc_control": self.allow_pc_control,
+                    "pc_control_until": self.pc_control_until,
                     "platform": self.platform,
                     "identity_pub": self.identity_pub,
                     "identity_pub_prev": self.identity_pub_prev,
@@ -220,6 +240,7 @@ class PairedDevice:
             last_lan_port=obj.get("last_lan_port"),
             cert_fingerprint=obj.get("cert_fingerprint"),
             allow_pc_control=bool(obj.get("allow_pc_control", False)),
+            pc_control_until=obj["pc_control_until"] if isinstance(obj.get("pc_control_until"), (int, float)) else None,
             platform=obj.get("platform") if obj.get("platform") in PLATFORMS else "android",
         )
 

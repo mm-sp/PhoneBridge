@@ -3,7 +3,8 @@
 These gate what a paired phone may push to or do on this PC. A device being paired never implies any of them
 (zero-trust): every incoming message is mapped to a feature and checked against the device's policy before a
 handler runs. Remote control (shell, PC files, input, screen view) is denied until the user turns it on — that
-setting is the same `allow_pc_control` flag the Device page has always had.
+setting is the `allow_pc_control` flag plus a deadline (`pc_control_until`): it switches itself off after
+PHONEBRIDGE_PC_CONTROL_MINUTES (default 60).
 
 "ask" means: the PC raises a prompt (the GUI registers `ask_callback`) the first time a feature is used in a
 connection; the answer lasts for that connection only. With no prompt available, "ask" behaves as "deny".
@@ -60,7 +61,7 @@ def feature_for(msg_type: str, payload: dict | None = None) -> str | None:
 
 def mode_of(device, feature: str) -> str:
     if feature == "remote_control":
-        return ALLOW if device.allow_pc_control else DENY
+        return ALLOW if device.pc_control_active() else DENY
     return device.permissions.get(feature, DEFAULTS[feature])
 
 
@@ -78,8 +79,14 @@ def set_mode(device, feature: str, mode: str) -> None:
     if feature == "remote_control":
         if mode == ASK:
             raise ValueError("remote control is either on or off")
-        updated = PairedDevice.update(device.fingerprint, allow_pc_control=mode == ALLOW)
-        device.allow_pc_control = mode == ALLOW
+        import time
+
+        from ..pairing import pc_control_ttl_seconds
+
+        on = mode == ALLOW
+        until = time.time() + pc_control_ttl_seconds() if on else None   # remote control always expires
+        updated = PairedDevice.update(device.fingerprint, allow_pc_control=on, pc_control_until=until)
+        device.allow_pc_control, device.pc_control_until = on, until
     else:
         updated = PairedDevice.mutate(device.fingerprint, lambda d: d.permissions.__setitem__(feature, mode))
         device.permissions[feature] = mode
