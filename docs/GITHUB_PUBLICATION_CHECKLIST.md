@@ -46,14 +46,14 @@ Irreversible part: only step 4 (replacing `.git`); it is reversible while the ba
 | apksigner / AAB signer / fingerprint `10:EE:C5:7A:...:DA:9B:F9` | PASS (unchanged) |
 | Application ID, version | PASS - `dev.phonebridge`, 1.4.0 (14), minSdk 26, targetSdk 29, no native libraries |
 | OSV dependency scan | PASS - 7 packages, no known vulnerabilities |
-| **R8 release APK on a real device** | **NOT TESTED** (`docs/DEVICE_SMOKE_TEST.md`) |
+| **R8 release APK on a real device** | **PARTIALLY TESTED**: one phone (Mi A3, Android 17), USB tunnel, 3 of 18 checks fully passed, 8 partly, 7 not tested; Wi-Fi, PC-to-phone control, SMS/calls/notifications/clipboard, TalkBack not tested (`docs/DEVICE_SMOKE_TEST.md`) |
 | Approval dialog (`app.py`), CI workflow, bandit/shellcheck, Android 13-16, TalkBack | NOT TESTED |
 
 ## E. Signing backup status
 Only **one** encrypted off-machine backup exists (on a separate device). A second, on different hardware, is still required. Keep any plaintext copy of the backup passphrase until it is stored safely elsewhere (password manager + paper) and a restore has been tested, then delete the plaintext copy.
 
 ## F. Remaining security issues
-Play Protect may block the sideloaded APK (see `docs/TROUBLESHOOTING.md`); R8 build never executed on a device; targetSdk 29; `BootReceiver` exported; PC-control approval dialog untested; single key backup; no independent human audit of SPAKE2/handshake; CI untested.
+Play Protect may block the sideloaded APK (see `docs/TROUBLESHOOTING.md`); R8 build only partially tested on one device (`docs/DEVICE_SMOKE_TEST.md`); targetSdk 29; `BootReceiver` exported; PC-control approval dialog untested; single key backup; no independent human audit of SPAKE2/handshake; CI untested.
 
 ## G. Files published / excluded
 Published: all git-tracked files (224 at the time of writing). Excluded: `dist/`, build outputs, keystores/properties/passphrases, venvs, logs, IDE files, `*.tar.gz`. Release artifacts (APK/AAB) are **not** attached anywhere until you approve.

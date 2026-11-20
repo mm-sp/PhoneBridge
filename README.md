@@ -28,7 +28,7 @@ Labels: **Implemented** = built and covered by automated tests and/or the author
 | Security dashboards, signed audit log, per-feature permissions | Implemented |
 | Android main screen: landscape-only, both landscape directions (by design) | Implemented, seen on one phone. Portrait is **not supported**; split-screen behaviour is **not verified** |
 | TalkBack support on Android | **Not tested** on a device |
-| The shrunk (R8) release APK | **Not tested** on a device - see `docs/DEVICE_SMOKE_TEST.md` |
+| The shrunk (R8) release APK | **Partially tested** on one phone (Mi A3, Android 17, USB tunnel): it starts, pairs, mirrors, transfers a file and enforces the PC-control approval with no crash in those paths; most features were not exercised - see `docs/DEVICE_SMOKE_TEST.md` |
 | iPhone app, screen-rotation sync, localisation | Not implemented |
 
 ## Screenshots

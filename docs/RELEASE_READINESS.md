@@ -18,7 +18,7 @@ Last updated 2026-11-19 (documentation correction pass). Everything in "Verified
 | Keystore backup scripts | round trip and wrong-passphrase rejection; one real backup made and verified by decrypting a copy pulled back from the device |
 
 ## NOT done / not verifiable here
-* **The R8-shrunk release APK has never been executed on a device.** Keep rules cover BouncyCastle, zxing and the services, but reflection/optimiser problems only show at run time. Follow `docs/DEVICE_SMOKE_TEST.md` before distributing.
+* **The R8-shrunk release APK has only been partially tested on one device** (Mi A3, Android 17, USB tunnel; no crash in the exercised paths). Wi-Fi, PC-to-phone control, SMS/calls/notifications/clipboard, Terminal, webcam, relay and TalkBack were not tested, and reflection/optimiser problems only show at run time. Finish `docs/DEVICE_SMOKE_TEST.md` before distributing.
 * No install, upgrade-over-existing, runtime-permission, foreground-service, Android 13-16, ARM execution, performance, split-screen or TalkBack testing was done in this release cycle (the main screen is landscape-only by design).
 * **bundletool** is not installed as a standalone tool; the AAB was built by AGP and its signer checked, but not validated with `bundletool validate`.
 * The PC-approval dialog (`app.py`) and the GitHub Actions workflow have never been run; bandit and shellcheck are not installed.
@@ -37,4 +37,4 @@ Debug-signed release -> permanent release key stored outside the repository; no 
 * Google Play Protect may warn about or block a sideloaded app that combines accessibility, SMS and screen capture. Nothing was done to avoid it, and it was not tested on the target OnePlus device.
 
 ## Verdict
-**Direct APK / GitHub source release: ready after the device smoke test of the R8 build and your approval to publish. Google Play: not ready.**
+**Direct APK / GitHub source release: ready after a fuller device smoke test of the R8 build (so far partial) and your approval to publish. Google Play: not ready.**

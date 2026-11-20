@@ -3,7 +3,7 @@
 Version 1.4.0 (Android `versionCode` 14). Report date 2026-11-19. Statuses come from reading the source and from commands run during this audit; where something was not run it says **NOT TESTED**. Details of the earlier full audit are in `docs/AUDIT_REPORT.md`.
 
 ## 1. Executive summary
-PhoneBridge links one Android phone to one Linux PC without any account or cloud: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and the reverse direction (phone controls the PC). Roughly 12.8k lines of Python (PC) and 7.9k lines of Kotlin (Android). The PC side has 832 automated checks that all pass in this audit. The Android side has no in-framework tests; it is covered by five JVM harnesses, lint and one hardware device (Xiaomi Mi A3). The project is suitable for direct-APK/GitHub distribution after a device smoke test of the R8 build; it is **not** ready for Google Play (section 33).
+PhoneBridge links one Android phone to one Linux PC without any account or cloud: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and the reverse direction (phone controls the PC). Roughly 12.8k lines of Python (PC) and 7.9k lines of Kotlin (Android). The PC side has 832 automated checks that all pass in this audit. The Android side has no in-framework tests; it is covered by five JVM harnesses, lint and one hardware device (Xiaomi Mi A3). The project is suitable for direct-APK/GitHub distribution after a fuller device smoke test of the R8 build (so far only partial, on one phone); it is **not** ready for Google Play (section 33).
 
 ## 2. Introduction
 A "Phone Link for Linux": all trust is local (pairing records on each device), all traffic is end-to-end encrypted and goes directly between the two devices (LAN, Bluetooth for pairing, USB tunnel) or through an optional relay you host.
@@ -64,7 +64,7 @@ PC: Python >= 3.10, PyGObject >= 3.46 (GTK4/libadwaita), `cryptography` >= 46, `
 Android requests SMS, call log, contacts, phone, storage (legacy), camera, Bluetooth/BLE, location (SSID only), overlay, battery-optimisation exemption, boot, plus Accessibility and Notification-listener services. Security model, tests and limits: `docs/SECURITY.md`. Key properties: TLS 1.3 only, pinned cert, Ed25519-signed ephemeral handshake, AES-256-GCM with replay window, peer-network policy, auth throttling, signed hash-chained audit ledger, PC-control time limit.
 
 ## 24. Signing and release architecture
-Application ID `dev.phonebridge`. Release certificate SHA-256 `10:EE:C5:7A:52:F5:C2:01:CF:C6:71:49:6B:78:7D:48:49:9C:D8:DB:14:A2:12:2D:D6:32:2B:4E:62:DA:9B:F9` (RSA 4096). Keystore lives outside the repo (`docs/SIGNING.md`); one encrypted backup exists on a phone, a second is still required. Release builds use R8 shrinking + obfuscation (a real-device smoke test is still outstanding: `docs/DEVICE_SMOKE_TEST.md`); Play-Store signing differs from direct-APK signing (`docs/SIGNING.md`).
+Application ID `dev.phonebridge`. Release certificate SHA-256 `10:EE:C5:7A:52:F5:C2:01:CF:C6:71:49:6B:78:7D:48:49:9C:D8:DB:14:A2:12:2D:D6:32:2B:4E:62:DA:9B:F9` (RSA 4096). Keystore lives outside the repo (`docs/SIGNING.md`); one encrypted backup exists on a phone, a second is still required. Release builds use R8 shrinking + obfuscation (a real-device smoke test is only partly done: `docs/DEVICE_SMOKE_TEST.md`); Play-Store signing differs from direct-APK signing (`docs/SIGNING.md`).
 
 ## 25. Testing - actual results (this audit, 2026-11-19)
 | Check | Result |
@@ -76,7 +76,7 @@ Application ID `dev.phonebridge`. Release certificate SHA-256 `10:EE:C5:7A:52:F5
 | AAB certificate | **PASS**, same fingerprint |
 | OSV dependency scan | **PASS**, no known vulnerabilities (7 packages) |
 | Secret/history scan | **PASS** (own regex scan; gitleaks/trufflehog not installed) |
-| Real-device smoke test of the R8 release APK | **NOT TESTED** |
+| Real-device smoke test of the R8 release APK | **PARTIALLY TESTED** - one phone (Mi A3, Android 17), USB tunnel; 3 of 18 checks passed fully, 8 partly, 7 not tested; no crash in the exercised paths (`docs/DEVICE_SMOKE_TEST.md`) |
 | Install/upgrade, Android 13-16, ARM execution, performance, TalkBack | **NOT TESTED** |
 | GitHub Actions workflow | **NOT TESTED** (never run; no remote) |
 | bandit / shellcheck / ruff | **NOT TESTED** (not installed) |
