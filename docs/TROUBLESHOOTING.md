@@ -3,6 +3,7 @@
 | Symptom | Likely cause / fix |
 |---|---|
 | "App blocked to protect your device" when installing | Google Play Protect. Use "More details" -> "Install anyway" or `adb install`. Do not disable Play Protect. Make sure the "install unknown apps" permission is granted to the installer app. |
+| The Android app is always horizontal | By design: the main screen is landscape-only (both landscape directions). Portrait is not supported. The QR scanner screen does allow portrait. |
 | "App not installed" over an existing install | Different signing key (debug vs release). Uninstall first; this removes the pairing. |
 | Phone cannot find the PC | Both on the same network? Firewall must allow TCP 28100 and UDP 28101. Try the USB link (`adb`, USB debugging on). Android 8-9 need `PHONEBRIDGE_ALLOW_TLS12=1` on the PC. |
 | Pairing fails: wrong PIN | The code lives 60 s and burns after 3 wrong tries; start a new pairing. |

@@ -5,8 +5,8 @@ Last updated 2026-11-19 (documentation correction pass). Everything in "Verified
 ## Verified (commands actually run)
 | Check | Result |
 |---|---|
-| PC test suite (`tools/run_tests.sh`, strict), 40 test files | 813 checks passed, 0 failed, 0 skipped |
-| Kotlin harnesses (audit 43, interop 18, sync 9, MMS 12) | passed (part of the 813) |
+| PC test suite (`tools/run_tests.sh`, strict), 41 test files | 832 checks passed, 0 failed, 0 skipped |
+| Kotlin harnesses (audit 43, interop 18, sync 9, MMS 12) | passed (part of the 832) |
 | `gradle :app:lintDebug :app:lintRelease` | 0 errors, 38 warnings |
 | `gradle :app:assembleDebug :app:assembleRelease :app:bundleRelease` (R8 + resource shrinking) | succeeds; release APK about 2.7 MB |
 | `apksigner verify` (release APK) | verifies, v2 scheme, one signer, certificate SHA-256 `10eec57a...da9bf9` = documented identity |
@@ -19,7 +19,7 @@ Last updated 2026-11-19 (documentation correction pass). Everything in "Verified
 
 ## NOT done / not verifiable here
 * **The R8-shrunk release APK has never been executed on a device.** Keep rules cover BouncyCastle, zxing and the services, but reflection/optimiser problems only show at run time. Follow `docs/DEVICE_SMOKE_TEST.md` before distributing.
-* No install, upgrade-over-existing, runtime-permission, foreground-service, Android 13-16, ARM execution, performance, portrait or TalkBack testing was done in this release cycle.
+* No install, upgrade-over-existing, runtime-permission, foreground-service, Android 13-16, ARM execution, performance, split-screen or TalkBack testing was done in this release cycle (the main screen is landscape-only by design).
 * **bundletool** is not installed as a standalone tool; the AAB was built by AGP and its signer checked, but not validated with `bundletool validate`.
 * The PC-approval dialog (`app.py`) and the GitHub Actions workflow have never been run; bandit and shellcheck are not installed.
 * **Signing-key backups:** only **one** encrypted off-machine backup exists. A second, on different hardware, is still required (`docs/SIGNING.md`).
@@ -27,7 +27,7 @@ Last updated 2026-11-19 (documentation correction pass). Everything in "Verified
 * Not changed: targetSdk 29, application ID, permission set (see `docs/PLAY_STORE.md`).
 
 ## Fixed during this effort
-Debug-signed release -> permanent release key stored outside the repository; no version control -> git with a cleaned local history; phone-to-PC control needs approval on the PC, lasts at most one hour and can be revoked at once; shell environment no longer leaks `PHONEBRIDGE_*`; per-message disk read; failing/skipped tests; portrait layout + TalkBack (not device-tested); R8 + log stripping + cleartext disabled; documentation corrected.
+Debug-signed release -> permanent release key stored outside the repository; no version control -> git with a cleaned local history; phone-to-PC control needs approval on the PC, lasts at most one hour and can be revoked at once; shell environment no longer leaks `PHONEBRIDGE_*`; per-message disk read; failing/skipped tests; main screen locked to landscape on purpose, with a manifest regression test; TalkBack support (not device-tested); R8 + log stripping + cleartext disabled; documentation corrected.
 
 ## Remaining / known
 * Play Store blockers (target API, SMS/call-log policy, accessibility use) - `docs/PLAY_STORE.md`.

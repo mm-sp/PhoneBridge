@@ -3,7 +3,7 @@
 **PhoneBridge is not "completely secure" or "unhackable".** This lists what exists and is tested, what does not, and the
 assumptions it rests on.
 
-**Evidence labels used below.** *Automated* = reproducible with `tools/run_tests.sh` (latest run 2026-11-19: 813 checks across 40 test files, 0 failed, 0 skipped; per-file counts quoted in the tables below are from earlier runs and may be lower than today's). *Author-reported hardware result* = obtained on the author's Xiaomi Mi A3 (LineageOS, Android 17) in earlier sessions; the logs are not in this repository and these results were **not re-run** during the 2026-11-19 audit. *AI-assisted review* = a read-only review by an AI model, not a human security audit. Anything not labelled should be treated as unverified.
+**Evidence labels used below.** *Automated* = reproducible with `tools/run_tests.sh` (latest run 2026-11-19: 832 checks across 41 test files, 0 failed, 0 skipped; per-file counts quoted in the tables below are from earlier runs and may be lower than today's). *Author-reported hardware result* = obtained on the author's Xiaomi Mi A3 (LineageOS, Android 17) in earlier sessions; the logs are not in this repository and these results were **not re-run** during the 2026-11-19 audit. *AI-assisted review* = a read-only review by an AI model, not a human security audit. Anything not labelled should be treated as unverified.
 
 ## Architecture
 
@@ -126,4 +126,4 @@ changed a device record (now atomic writes + locked updates), and a replay that 
 ## How to re-run everything
 
 `python3 linux/tests/run_all.py` (use a venv with `fusepy` for test_phone_fs; GUI tests run under `xvfb-run`).
-Latest run (2026-11-19, PC side, `tools/run_tests.sh`, strict): **813 checks across 40 test files, 0 failed, 0 skipped** (includes the Kotlin harnesses). Not covered by automation: the live phone, the PC approval dialog, and the R8 release build.
+Latest run (2026-11-19, PC side, `tools/run_tests.sh`, strict): **832 checks across 41 test files, 0 failed, 0 skipped** (includes the Kotlin harnesses). Not covered by automation: the live phone, the PC approval dialog, and the R8 release build.

@@ -26,7 +26,8 @@ Labels: **Implemented** = built and covered by automated tests and/or the author
 | Join the phone's hotspot from the PC | **Partial** - a real access point was never exercised |
 | Phone controls the PC (shell, files, screen, input) | Implemented - off by default, approval on the PC, one hour at most |
 | Security dashboards, signed audit log, per-feature permissions | Implemented |
-| Android portrait layout and TalkBack support | **Not tested** on a device |
+| Android main screen: landscape-only, both landscape directions (by design) | Implemented, seen on one phone. Portrait is **not supported**; split-screen behaviour is **not verified** |
+| TalkBack support on Android | **Not tested** on a device |
 | The shrunk (R8) release APK | **Not tested** on a device - see `docs/DEVICE_SMOKE_TEST.md` |
 | iPhone app, screen-rotation sync, localisation | Not implemented |
 

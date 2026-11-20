@@ -40,7 +40,7 @@ Irreversible part: only step 4 (replacing `.git`); it is reversible while the ba
 ## D. Tests and builds (latest run)
 | Item | Status |
 |---|---|
-| PC tests, strict, 40 test files | PASS - 813 checks, 0 failed, 0 skipped |
+| PC tests, strict, 41 test files | PASS - 832 checks, 0 failed, 0 skipped |
 | Android lint | PASS - 0 errors, 38 warnings |
 | Debug APK, release APK, AAB | PASS |
 | apksigner / AAB signer / fingerprint `10:EE:C5:7A:...:DA:9B:F9` | PASS (unchanged) |
@@ -74,7 +74,7 @@ git push origin v1.4.0
 Authenticate with a GitHub token or SSH key yourself; never paste a token into a chat or a file in the repository.
 
 ## I. Cleanup result (2026-11-19)
-Applied: the repository's `.git` was replaced by a rebuilt history. 11 commits (the original 10 plus the NOTICE correction), all authored and committed by `mm-sp <62277083+mm-sp@users.noreply.github.com>`, same order, messages and dates (dates carry the +0530 timezone). Verified: no personal e-mail, home-directory path or phone serial in any commit's contents or metadata; no signing-file types in any commit; every tracked file byte-identical to the pre-cleanup working tree; `git fsck --strict` clean; LICENSE sha256 `cfc7749b...523d30`; tests 813/0; APK/AAB rebuilt; release certificate unchanged.
+Applied: the repository's `.git` was replaced by a rebuilt history. 11 commits (the original 10 plus the NOTICE correction), all authored and committed by `mm-sp <62277083+mm-sp@users.noreply.github.com>`, same order, messages and dates (dates carry the +0530 timezone). Verified: no personal e-mail, home-directory path or phone serial in any commit's contents or metadata; no signing-file types in any commit; every tracked file byte-identical to the pre-cleanup working tree; `git fsck --strict` clean; LICENSE sha256 `cfc7749b...523d30`; tests 813/0 (at that time); APK/AAB rebuilt; release certificate unchanged.
 Private rollback material (contains the old identity - **never publish or upload these**), in the parent folder of the repository:
 * `phonebridge-pre-publish-20261119.bundle` - git bundle of the original 10 commits (verified: clones to the same HEAD).
 * `phonebridge-git-old-pre-publish/` - the complete old `.git` directory (all 11 old commits including the NOTICE fix).
