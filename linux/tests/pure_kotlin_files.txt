@@ -1,0 +1,5 @@
+# JVM-PURE registry (docs/SECURITY_REMEDIATION_PLAN.md 20.4): Kotlin files, relative to
+# android/app/src/main/java/dev/phonebridge/, that import no android.* class and may be compiled with the stdlib,
+# org.json and bcprov alone. test_pure_kotlin_files_import_no_android rejects an android reference in any listed file.
+# Later commits add their pure files here (CapabilityTable.kt, LeaseRegistry.kt, ...); K0 lists only SyncCore.kt.
+SyncCore.kt
