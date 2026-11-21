@@ -19,7 +19,6 @@ from .pc_remote import BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, KEYSYMS, RemoteDesktop, 
 from . import pairing
 from .security import ledger as sec_ledger, permissions
 from .pairing import PairedDevice
-from .terminal import TerminalSession
 from .transport import ControlChannelServer, DeviceConnection
 
 log = logging.getLogger("phonebridge.pc_control")
@@ -38,7 +37,6 @@ class PcControl:
         self._stream_conn: DeviceConnection | None = None
         self._frame_in_flight = False
         self._needs_reask = False
-        self._terms: dict[str, TerminalSession] = {}  # one shell per phone
         self._gate_cache: dict[str, tuple[tuple[int, int], float | None]] = {}
         # PC-side approval: an async callable (device) -> minutes granted (0 = refused). The GUI shows the prompt.
         # Without one (tests, headless) a phone's request simply stays refused.
@@ -60,12 +58,12 @@ class PcControl:
             "pc.input": self._on_input,
             "pc.screen_start": self._on_screen_start,
             "pc.screen_stop": self._on_screen_stop,
-            "pc.term_open": self._on_term_open,
-            "pc.term_input": self._on_term_input,
-            "pc.term_resize": self._on_term_resize,
-            "pc.term_close": self._on_term_close,
         }.items():
             server.on(type_, self._gated(handler))
+        # The terminal is unavailable. These types are deliberately NOT wrapped by `_gated`: `_gated` would raise a PC
+        # approval prompt for a phone without PC control before any refusal could happen.
+        for type_ in ("pc.term_open", "pc.term_input", "pc.term_resize", "pc.term_close"):
+            server.on(type_, self._refuse_terminal)
         server.on_connection_change(self._on_connection_change)
         loop.call_soon_threadsafe(loop.call_later, 5.0, self._sweep_expired)
 
@@ -143,18 +141,13 @@ class PcControl:
             self._loop.call_soon_threadsafe(self._revoke_live_sessions, device.fingerprint)
 
     def _revoke_live_sessions(self, fingerprint: str) -> None:
-        """Control was switched off or timed out: end the shell now (its output would otherwise keep flowing to the
-        phone with no further gated message) and the screen view."""
-        term = self._terms.pop(fingerprint, None)
-        if term is not None:
-            log.info("PC control no longer allowed: closing the phone's terminal")
-            term.close()
+        """Control was switched off or timed out: end the screen view now."""
         if self._stream_conn is not None and self._stream_conn.fingerprint == fingerprint:
             GLib.idle_add(self._stop_screen)
 
     def _sweep_expired(self) -> None:
         """Every few seconds: (1) any phone whose time limit ran out gets its switch cleared and an `expired` audit record,
-        (2) shells/screen views of phones that are no longer allowed are closed, even if the phone is silent."""
+        (2) screen views of phones that are no longer allowed are closed, even if the phone is silent."""
         try:
             for d in PairedDevice.list_all():
                 if d.allow_pc_control and not d.pc_control_active():
@@ -163,14 +156,14 @@ class PcControl:
                     self._server.audit(sec_ledger.PERMISSION, d.fingerprint, feature="remote_control", action="pc_control.expired")
         except Exception:  # noqa: BLE001 - housekeeping must never stop the sweep
             log.exception("expiry sweep failed")
-        live = list(self._terms) + ([self._stream_conn.fingerprint] if self._stream_conn else [])
+        live = [self._stream_conn.fingerprint] if self._stream_conn else []
         for fp in live:
             if not self._pc_control_allowed(fp):
                 self._revoke_live_sessions(fp)
         self._loop.call_later(5.0, self._sweep_expired)
 
     def _gated(self, handler):
-        """Shell, files, input and screen view of this PC are off until the user enables
+        """Files, input and screen view of this PC are off until the user enables
         "Allow this phone to control this PC" on the phone's card in the Device page."""
 
         async def wrapper(conn: DeviceConnection, env) -> None:
@@ -196,45 +189,17 @@ class PcControl:
     def _on_connection_change(self, conn: DeviceConnection, connected: bool) -> None:
         if not connected:
             GLib.idle_add(self._stop_screen)
-            term = self._terms.pop(conn.fingerprint, None)
-            if term is not None:
-                term.close()
 
-    # ------------------------------------------------------------- terminal
+    # ------------------------------------------------------------- terminal (unavailable)
 
-    async def _on_term_open(self, conn: DeviceConnection, env) -> None:
-        cols, rows = int(env.payload.get("cols", 80)), int(env.payload.get("rows", 24))
-        term = self._terms.get(conn.fingerprint)
-        if term is not None and term.alive and not env.payload.get("new"):
-            term.resize(cols, rows)
-            # Reopening the tab: show what happened meanwhile.
-            await conn.send("control", "pc.term_output", {"data": term.scrollback.decode("utf-8", "replace"),
-                                                         "replay": True})
-            return
-        if term is not None:
-            term.close()
-
-        async def send(type_: str, payload: dict) -> None:
-            current = self._server.get_connection(conn.fingerprint)
-            if current is not None:
-                await current.send("control", type_, payload)
-
-        self._terms[conn.fingerprint] = TerminalSession(self._loop, send, cols, rows)
-
-    async def _on_term_input(self, conn: DeviceConnection, env) -> None:
-        term = self._terms.get(conn.fingerprint)
-        if term is not None:
-            term.write(str(env.payload.get("data", "")))
-
-    async def _on_term_resize(self, conn: DeviceConnection, env) -> None:
-        term = self._terms.get(conn.fingerprint)
-        if term is not None:
-            term.resize(int(env.payload.get("cols", 80)), int(env.payload.get("rows", 24)))
-
-    async def _on_term_close(self, conn: DeviceConnection, _env) -> None:
-        term = self._terms.pop(conn.fingerprint, None)
-        if term is not None:
-            term.close()
+    async def _refuse_terminal(self, conn: DeviceConnection, env) -> None:
+        """Every terminal request is refused, in every grant state, before any approval workflow. Reads only `env.type`
+        (never the payload), writes one `access.denied` record and sends one `pc.status`."""
+        self._server.audit(sec_ledger.DENIED, conn.fingerprint, feature="terminal", message=env.type, mode="unavailable")
+        try:
+            await conn.send("control", "pc.status", {"denied": True, "message": "The terminal is not available"})
+        except Exception:  # noqa: BLE001 - the phone may have gone away
+            pass
 
     # ------------------------------------------------------------- info / ports / apps / files
 
