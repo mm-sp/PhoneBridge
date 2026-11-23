@@ -12,6 +12,7 @@ import time
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -51,7 +52,10 @@ async def main_async() -> int:
 
     server = transport.ControlChannelServer(port=PORT)
     await server.start()
-    pc = PcControl(server, asyncio.get_running_loop(), clipboard_text=lambda: "")
+    # Run the expiry sweeps explicitly below without scheduling background sweeps.
+    pc_loop = Mock(wraps=asyncio.get_running_loop())
+    pc_loop.call_later.return_value = None
+    pc = PcControl(server, pc_loop, clipboard_text=lambda: "")
     serve = asyncio.ensure_future(server.serve_forever())
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -126,47 +130,41 @@ async def main_async() -> int:
     check("offer announces a separate data connection with a resume key",
           offer.payload.get("data_conn") is True and bool(offer.payload.get("resume_key")))
 
-    print("6. terminal: run a command in a real shell")
-    seq[0] += 1
-    writer.write(crypto.pack_frame(cipher.encrypt(Envelope("control", "pc.term_open", seq[0],
-                                                           {"cols": 80, "rows": 24}).to_json())))
-    seq[0] += 1
-    writer.write(crypto.pack_frame(cipher.encrypt(Envelope("control", "pc.term_input", seq[0],
-                                                           {"data": "echo pb-$((40+2))\r"}).to_json())))
-    await writer.drain()
-    output = ""
-    try:
-        while "pb-42" not in output:
-            env = await recv()
-            if env.type == "pc.term_output":
-                output += env.payload["data"]
-    except asyncio.TimeoutError:
-        pass
-    check("shell ran the command and sent its output", "pb-42" in output)
-    seq[0] += 1
-    writer.write(crypto.pack_frame(cipher.encrypt(Envelope("control", "pc.term_close", seq[0], {}).to_json())))
-    await writer.drain()
-    exit_env = await recv()
-    check("closing ends the shell", exit_env.type == "pc.term_exit")
+    print("7. the expiry sweep clears an expired grant, records it and ends a live screen view")
+    import types
+    from phonebridge import pc_control as pcmod
 
-    print("7. a running shell is closed by itself when the time limit runs out")
-    seq[0] += 1
-    writer.write(crypto.pack_frame(cipher.encrypt(Envelope("control", "pc.term_open", seq[0],
-                                                           {"cols": 80, "rows": 24, "new": True}).to_json())))
-    await writer.drain()
-    await asyncio.sleep(0.5)
+    events = []
+    stops = []
+    real_audit, real_idle = server.audit, pcmod.GLib.idle_add
+    server.audit = lambda event, device=None, **meta: events.append((event, device, meta))
+    pcmod.GLib.idle_add = lambda fn, *a: stops.append(fn)
+    other = pairing.PairedDevice("beef", "Other Phone", os.urandom(32), allow_pc_control=True,
+                                 pc_control_until=time.time() + 3600, identity_pub=ident.public_b64)
+    other.save()
+    phone.allow_pc_control, phone.pc_control_until = True, time.time() + 1
+    phone.save()
     phone.pc_control_until = time.time() - 1
     phone.save()
-    ended = False
-    try:
-        for _ in range(60):
-            env = await asyncio.wait_for(recv(), 12)
-            if env.type == "pc.term_exit":
-                ended = True
-                break
-    except asyncio.TimeoutError:
-        pass
-    check("idle shell was closed within ~5 s of the deadline, with no further message from the phone", ended)
+    pc._stream_conn = types.SimpleNamespace(fingerprint="beef")      # a view of the phone whose grant is still valid
+    pc._sweep_expired()
+    other_untouched = not stops
+    pc._stream_conn = types.SimpleNamespace(fingerprint="cafe")      # a view of the phone whose grant just expired
+    pc._sweep_expired()
+    stored = pairing.PairedDevice.load("cafe")
+    expired_events = [e for e in events if e[0] == "permission.changed" and e[2].get("action") == "pc_control.expired"]
+    parts = {"switch cleared": stored.allow_pc_control is False and stored.pc_control_until is None,
+             "one expired record": len(expired_events) == 1 and expired_events[0][1] == "cafe",
+             "gate cache no longer allows the phone": not pc._pc_control_allowed("cafe"),
+             "screen view of the expired phone stopped once": stops == [pc._stop_screen],
+             "other phone's view not stopped": other_untouched}
+    check("sweep clears the expired grant, records pc_control.expired once and stops only that phone's screen view", all(parts.values()))
+    for k, v in parts.items():
+        if not v:
+            print("       failed part:", k)
+    pc._stream_conn = None
+    server.audit, pcmod.GLib.idle_add = real_audit, real_idle
+    (pairing.DEVICES_DIR / "beef.json").unlink()
 
     print("8. a phone cannot enable PC control by itself: only the answer on the PC does")
     from phonebridge.security import permissions as P
@@ -233,27 +231,37 @@ async def main_async() -> int:
     await drain()
     check("after a refusal the phone cannot spam prompts (cooldown)", prompts == ["Test Phone"])
 
-    print("9. revoking closes a running shell immediately")
+    print("9. revoking records the event, starts the cooldown and ends a live screen view")
     pc._approval_cooldown.clear()
     P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.ALLOW)
     pc._gate_cache.clear()
     await drain()
-    seq[0] += 1
-    writer.write(crypto.pack_frame(cipher.encrypt(Envelope("control", "pc.term_open", seq[0], {"cols": 80, "rows": 24, "new": True}).to_json())))
-    await writer.drain()
-    await asyncio.sleep(0.5)
-    t0 = time.time()
+    events, stops = [], []
+    server.audit = lambda event, device=None, **meta: events.append((event, device, meta))
+    pcmod.GLib.idle_add = lambda fn, *a: stops.append(fn)
+    pc._stream_conn = types.SimpleNamespace(fingerprint="beef")      # another phone's view must survive this revoke
+    P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.ALLOW)
     P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.DENY)
-    ended = False
-    try:
-        while time.time() - t0 < 3:
-            env = await asyncio.wait_for(recv(), 3)
-            if env.type == "pc.term_exit":
-                ended = True
-                break
-    except asyncio.TimeoutError:
-        pass
-    check("shell closed within 3 s of revoking (not waiting for the 5 s sweep)", ended)
+    await asyncio.sleep(0.3)
+    other_untouched = not stops
+    P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.ALLOW)
+    pc._stream_conn = types.SimpleNamespace(fingerprint="cafe")
+    events.clear()
+    pc._approval_cooldown.clear()
+    P.set_mode(pairing.PairedDevice.load("cafe"), "remote_control", P.DENY)
+    await asyncio.sleep(0.3)
+    revoked = [e for e in events if e[0] == "permission.changed" and e[2].get("action") == "pc_control.revoked"]
+    parts = {"one revoked record": len(revoked) == 1 and revoked[0][1] == "cafe",
+             "cooldown set": pc._approval_cooldown.get("cafe", 0) > time.monotonic() + 100,
+             "gate cache dropped": "cafe" not in pc._gate_cache,
+             "screen view stopped once": stops == [pc._stop_screen],
+             "other phone's view not stopped": other_untouched}
+    check("revoke records pc_control.revoked once, starts the cooldown and stops only that phone's screen view", all(parts.values()))
+    for k, v in parts.items():
+        if not v:
+            print("       failed part:", k)
+    pc._stream_conn = None
+    server.audit, pcmod.GLib.idle_add = real_audit, real_idle
 
     writer.close()
     serve.cancel()

@@ -46,7 +46,7 @@ jobs:
           # Hosted runners sometimes get HTTP 503 from the Ubuntu package mirrors. APT retries each file itself
           # (Acquire::Retries), the whole update+install sequence is retried up to 3 times, and an incomplete
           # "apt-get update" (some index could not be fetched) counts as a failure (APT::Update::Error-Mode=any).
-          PKGS="python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav xvfb openjdk-17-jdk-headless"
+          PKGS="python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav xvfb openjdk-17-jdk-headless"
           APT_OPTS="-o Acquire::Retries=3 -o APT::Update::Error-Mode=any"
           for attempt in 1 2 3; do
             # One log per attempt, overwritten each time: after the last failed attempt it holds that attempt's output.
@@ -64,7 +64,7 @@ jobs:
           cat apt-attempt.log
           grep -E '^(E|W):' apt-attempt.log | head -n 8 | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error title=apt::$line"; done
           exit 1
-      - name: Tests (the Kotlin interop tests need Gradle's Kotlin compiler and are skipped here; run them locally)
+      - name: PC tests (allow optional prerequisites to be missing)
         env: { PHONEBRIDGE_STRICT: '0' }
         run: |
           set -o pipefail
@@ -72,6 +72,39 @@ jobs:
       - name: Explain failure (annotations)
         if: failure()
         run: .github/ci-annotate.sh pc-tests.log "pc tests"
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.14.7' }
+      - name: Provision K0 Kotlin test prerequisites
+        shell: bash
+        run: |
+          # Expose the action's Gradle installation and the hosted SDK at the paths the test runner searches.
+          gradle_bin="$(readlink -f "$(command -v gradle)")"
+          gradle_dist="$HOME/.gradle/wrapper/dists/gradle-8.14.7-bin/ci"
+          mkdir -p "$gradle_dist" "$HOME/Android/Sdk/platforms"
+          ln -sfn "${gradle_bin%/bin/gradle}" "$gradle_dist/gradle-8.14.7"
+          sdk_platform="$ANDROID_HOME/platforms/android-35"
+          if [ ! -r "$sdk_platform/android.jar" ]; then
+            sdkmanager --sdk_root="$ANDROID_HOME" 'platforms;android-35'
+          fi
+          if [ ! -r "$HOME/Android/Sdk/platforms/android-35/android.jar" ]; then
+            ln -sfn "$sdk_platform" "$HOME/Android/Sdk/platforms/android-35"
+          fi
+          fetch_jar() {
+            local group="$1" artifact="$2" version="$3" dir
+            dir="$HOME/.gradle/caches/modules-2/files-2.1/$group/$artifact/$version/ci"
+            mkdir -p "$dir"
+            curl --fail --silent --show-error --location --retry 3 \
+              "https://repo.maven.apache.org/maven2/${group//./\/}/$artifact/$version/$artifact-$version.jar" \
+              -o "$dir/$artifact-$version.jar"
+          }
+          fetch_jar org.json json 20240303
+          fetch_jar org.bouncycastle bcprov-jdk18on 1.87
+      - name: K0 Kotlin tests (strict)
+        env: { PHONEBRIDGE_STRICT: '1' }
+        timeout-minutes: 20
+        run: |
+          .venv-test/bin/python linux/tests/test_strict_environment.py
+          .venv-test/bin/python linux/tests/test_kotlin_toolchain.py
 
   release:
     # Only for version tags, only in the upstream repository, only when the signing secrets exist. Secrets are written to
