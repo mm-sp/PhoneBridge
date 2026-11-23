@@ -124,12 +124,13 @@ def java_version(java: str) -> tuple[bool, str]:
     try:
         r = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return False, f"{java} does not run: {exc}"
-    first = (r.stderr or r.stdout).strip().splitlines()[:1]
-    line = first[0][:120] if first else ""
-    if r.returncode != 0 or not re.search(r'(openjdk|java) version "\d', line):
-        return False, f"{java} -version exit {r.returncode}: {line or '(no output)'}"
-    return True, line
+        return False, f"{java} does not run: {type(exc).__name__}"
+    for line in (r.stderr + "\n" + r.stdout).splitlines():
+        version = re.match(r'^(?:openjdk|java) version "[0-9][A-Za-z0-9._+-]*"(?:\s|$)', line)
+        if version and r.returncode == 0:
+            return True, version[0].rstrip()
+    reason = "non-zero status" if r.returncode else "no recognizable version line"
+    return False, f"{java} -version exit {r.returncode}: {reason}"
 
 
 @dataclass(frozen=True)
@@ -296,9 +297,8 @@ def _blank_noncode(text: str) -> str:
     Supported lexical rules: `//` line comments; `/* */` block comments, NESTED as Kotlin allows; `"..."` strings with
     backslash escapes; `\"\"\"...\"\"\"` raw strings (no escapes; the closing delimiter is the last three quotes of a run of
     quotes); `'x'`, `'\\''`, `'\\u0041'` character literals; `${ ... }` templates (nested, braces counted, strings
-    inside templates handled recursively); backtick-quoted identifiers are blanked EXCEPT those whose whole token is
-    exactly `android` or `androidx`, which stay visible (their backticks become spaces) because `android`.os.Build names the
-    Android package; an unterminated backtick identifier (none is closed on its own line) raises ScannerError.
+    inside templates handled recursively); backtick-quoted identifiers are kept intact so the matcher can treat each
+    as one token, even when it contains dots. An unterminated backtick identifier raises ScannerError.
     An unterminated block comment, raw string, `${` template or backtick identifier raises ScannerError (they would otherwise hide the rest
     of the file). Lines are the original `\\n`-separated lines: other separators (form feed, U+2028, lone CR) are ordinary
     characters here, so blanked and original text always have identical line boundaries.
@@ -352,11 +352,6 @@ def _blank_noncode(text: str) -> str:
                 nl = text.find("\n", i + 1)
                 if j < 0 or 0 <= nl < j:        # a backtick identifier never contains a line break
                     raise ScannerError(f"unterminated backtick identifier at line {text.count(chr(10), 0, i) + 1}")
-                if text[i + 1:j] in ("android", "androidx"):
-                    blank(i, i + 1)              # keep the name itself visible to the matcher: `android`.os.Build IS the package
-                    blank(j, j + 1)
-                else:
-                    blank(i, j + 1)
                 i = j + 1
             elif in_template and c == "{":
                 depth += 1
@@ -409,11 +404,11 @@ def _blank_noncode(text: str) -> str:
     return "".join(out)
 
 
-# `android.` or `androidx.` as the start of a qualified name (not preceded by a name character or a dot), followed by a
-# letter, underscore or `*`, upper or lower case, so `android.R.string`, `android.Manifest`, `androidx.core.X` and
-# `import android.*` are all found. It is matched against the WHOLE blanked text (`\s` includes newlines and the blanked
-# comments), so `android` + newline + `.os.Build` and `android.` + newline + `os.Build` are found too.
-_ANDROID_NAME = re.compile(r"(?<![\w.])(?:android|androidx)\s*\.\s*(?:[A-Za-z_]|\*)")
+# Match Android package roots with an ordinary, escaped or wildcard segment after the dot. Consume other
+# backtick identifiers whole so a dot inside one never starts or separates a qualified name.
+_ANDROID_NAME = re.compile(
+    r"(?P<reference>(?<![\w.])(?:androidx?|`androidx?`)\s*\.\s*(?:[A-Za-z_*]|`[^`\n]+`))|`[^`\n]*`"
+)
 
 
 def android_reference_lines(text: str) -> list[tuple[int, str]]:
@@ -424,6 +419,8 @@ def android_reference_lines(text: str) -> list[tuple[int, str]]:
     orig = text.split("\n")
     seen: dict[int, str] = {}
     for m in _ANDROID_NAME.finditer(blanked):
+        if m["reference"] is None:
+            continue
         no = blanked.count("\n", 0, m.start())
         seen.setdefault(no, orig[no].strip())
     return [(no + 1, line) for no, line in sorted(seen.items())]
@@ -518,26 +515,26 @@ def _boundary_problem(tests_dir: Path, src_dir: Path) -> str | None:
     return None
 
 
-def _harness_problem(h, tests_dir: Path, src_dir: Path, production_inodes: set) -> str | None:
-    """Why a harness path is not acceptable, or None. The path is RESOLVED first (symlinks followed), so a link inside
+def _harness_problem(h, tests_dir: Path, src_dir: Path, production_inodes: set) -> tuple[Path | None, str | None]:
+    """The exact resolved harness path, or why it is refused. The path is RESOLVED first (symlinks followed), so a link inside
     the tests directory that points at production code resolves outside it and is refused. The REAL Android production
     directory is always excluded, whatever `src_dir` is; a hard link to a production file is refused by (device, inode)."""
     try:
         p = Path(h).resolve(strict=False)
         if not p.is_file():
-            return f"harness {p} does not exist or is not a file"
+            return None, f"harness {p} does not exist or is not a file"
         if p.suffix != ".kt":
-            return f"harness {p.name} is not a .kt file"
+            return None, f"harness {p.name} is not a .kt file"
         for root in (ANDROID_SRC.resolve(), src_dir.resolve()):
             if _inside(p, root):
-                return f"harness {p} is inside the Android production source directory {root}"
+                return None, f"harness {p} is inside the Android production source directory {root}"
         if not _inside(p, tests_dir.resolve()):
-            return f"harness {h} resolves to {p}, outside the tests directory {tests_dir.resolve()}"
+            return None, f"harness {h} resolves to {p}, outside the tests directory {tests_dir.resolve()}"
         if _inode_key(p) in production_inodes:
-            return f"harness {p} is a hard link to a production source file (same device and inode)"
+            return None, f"harness {p} is a hard link to a production source file (same device and inode)"
     except (ValueError, OSError, RuntimeError, TypeError) as exc:
-        return f"harness {h!r} cannot be checked ({type(exc).__name__}: {exc})"
-    return None
+        return None, f"harness {h!r} cannot be checked ({type(exc).__name__}: {exc})"
+    return p, None
 
 
 def _registered_problem(n: str, src_dir: Path, real_inodes: set) -> tuple[Path | None, str | None]:
@@ -580,7 +577,7 @@ def compile_pure(tc: Toolchain, names: list, out_dir, *, harness: list = (), bc:
     `harness` are test-owned files (for example `tests/sync/Harness.kt`) compiled with the pure files; they need not be
     registered. It also refuses, with exit 97 and BEFORE anything is read, arguments of the wrong type: `names` and
     `harness` must be lists or tuples (`names` of str, `harness` of str or pathlib.Path); `registry`, `src_dir` and
-    `tests_dir` must be None or a pathlib.Path (not a str, int or bytes); `out_dir` a str or pathlib.Path; `bc` a bool.
+    `tests_dir` must be None or a pathlib.Path (not a str, int or bytes); `out_dir` a str or pathlib.Path without NUL; `bc` a bool.
     If the production source tree (the real ANDROID_SRC and `src_dir`) cannot be fully inspected, the request is refused:
     "production source cannot be fully inspected".
     Limitation: a hard link is detected only against production files that exist under the production directories at the
@@ -591,6 +588,8 @@ def compile_pure(tc: Toolchain, names: list, out_dir, *, harness: list = (), bc:
             wrong.append(f"{label} must be None or a pathlib.Path, not {type(value).__name__}")
     if not isinstance(out_dir, (str, Path)):
         wrong.append(f"out_dir must be a str or pathlib.Path, not {type(out_dir).__name__}")
+    elif "\0" in str(out_dir):
+        wrong.append("out_dir must not contain NUL")
     if not isinstance(bc, bool):
         wrong.append(f"bc must be a bool, not {type(bc).__name__}")
     if not isinstance(names, (list, tuple)):
@@ -635,11 +634,11 @@ def compile_pure(tc: Toolchain, names: list, out_dir, *, harness: list = (), bc:
             srcs.append(path)
     if not why:
         for h in harness:
-            bad = _harness_problem(h, tests_dir, src_dir, production_inodes)
+            path, bad = _harness_problem(h, tests_dir, src_dir, production_inodes)
             if bad:
                 problems.append(bad)
             else:
-                srcs.append(Path(h).resolve())
+                srcs.append(path)
     for p in srcs:
         try:
             refs = android_references(p.read_text(encoding="utf-8"))
@@ -668,10 +667,12 @@ def check_compiler(tc: Toolchain) -> tuple[bool, str]:
         src.write_text(HELLO)
         c = compile(tc, [src], Path(tmp) / "out")
         if not c.ok:
-            return False, f"compile failed (exit {c.returncode}): {(c.stderr or c.stdout).strip()[:400]}"
+            return False, f"compiler proof failed to compile (exit {c.returncode})"
         r = run(tc, Path(tmp) / "out", "HelloKt")
-        if not r.ok or "k0-compiler-ok" not in r.stdout:
-            return False, f"run failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[:400]}"
+        if not r.ok:
+            return False, f"compiler proof failed to run (exit {r.returncode})"
+        if "k0-compiler-ok" not in r.stdout:
+            return False, "compiler proof ran without printing its expected marker"
     return True, f"compiled and ran a program with Kotlin {tc.kotlin_version}"
 
 

@@ -247,7 +247,7 @@ def main() -> int:
             (src / "GoodPure.kt").write_text("package dev.phonebridge\nfun goodPure(): Int = 7\n")
             (src / "Unreg.kt").write_text("package dev.phonebridge\nfun unreg(): Int = 3\n")
             (src / "Real.kt").write_text("package dev.phonebridge\nfun real(): Int = 5\n")
-            (src / "TickAndroid.kt").write_text("package dev.phonebridge\nfun t(): String = `android`.os.Build.MODEL\n")
+            (src / "TickAndroid.kt").write_text("package dev.phonebridge\nfun t(): String = `android`.`os`.Build.MODEL\n")
             (src / "TickOpen.kt").write_text("package dev.phonebridge\nval `never closed\n")
             (other / "Elsewhere.kt").write_text("fun elsewhere(): Int = 1\n")
             (src / "Link1.kt").symlink_to(other / "Elsewhere.kt")
@@ -334,6 +334,10 @@ def main() -> int:
                 results = [K.compile_pure(tc, ["GoodPure.kt"], bad_out, **kw) for bad_out in (None, 5, b"out", ["x"])]
             check("out_dir of the wrong type (None, int, bytes, list) is refused with 97, no subprocess, nothing created in the working directory",
                   all(c.returncode == K.RUNNER_ERROR and "out_dir must be a str or pathlib.Path" in c.stderr for c in results) and not nc.calls and sorted(os.listdir(".")) == here)
+            with NoCompiler() as nc:
+                results = [K.compile_pure(tc, ["GoodPure.kt"], bad_out, **kw) for bad_out in ("out\0bad", Path("out\0bad"))]
+            check("out_dir containing NUL is refused with 97 before starting the compiler",
+                  all(c.returncode == K.RUNNER_ERROR and "out_dir must not contain NUL" in c.stderr for c in results) and not nc.calls)
 
             print("  M-A: the production source tree must be fully inspectable (fail closed)")
             as_root = os.geteuid() == 0
@@ -425,7 +429,7 @@ def main() -> int:
                     os.chmod(good / "a", 0o755)
 
             print("  L2 / M3: backtick identifiers")
-            reject(tc, tmp, "a registered file with `android`.os.Build (backtick-quoted package)", ["TickAndroid.kt"], why="references the Android framework", **kw)
+            reject(tc, tmp, "a registered file with `android`.`os`.Build (backtick-quoted package segments)", ["TickAndroid.kt"], why="references the Android framework", **kw)
             reject(tc, tmp, "a registered file with an unterminated backtick identifier", ["TickOpen.kt"], why="unterminated backtick identifier", **kw)
 
         print("JVM-COMPILE capability (android.jar on the classpath; only a non-framework path runs)")
@@ -457,11 +461,14 @@ def main() -> int:
         with K.Workdir() as tmp:
             tmp = Path(tmp)
             src = tmp / "Where.kt"
-            src.write_text("fun main() { println(org.json.JSONObject().javaClass.protectionDomain.codeSource.location.path) }\n")
+            src.write_text("fun main() {\n"
+                           "    val location = org.json.JSONObject().javaClass.protectionDomain.codeSource.location\n"
+                           "    println(java.nio.file.Path.of(location.toURI()).toRealPath())\n"
+                           "}\n")
             c = K.compile(tc, [src], tmp / "o")
             r = K.run(tc, tmp / "o", "WhereKt", bc=True, android=True)
             check("at run time with android.jar on the classpath, JSONObject is loaded from the real org.json jar, not the stub",
-                  c.ok and r.ok and r.stdout.strip() == tc.json_jar)
+                  c.ok and r.ok and r.stdout.rstrip("\n") == str(Path(tc.json_jar).resolve()))
 
         print("temporary-directory cleanup after this run (all K.Workdir directories were created under a private temp root)")
         created = list(K.Workdir.created)

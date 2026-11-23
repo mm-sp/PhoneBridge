@@ -17,7 +17,6 @@ set -u
 set -f                                   # no pathname expansion anywhere (PATH entries with * or ? stay literal)
 _self="${BASH_SOURCE[0]}"
 case "$_self" in */*) _dir="${_self%/*}" ;; *) _dir="." ;; esac
-ROOT="$(cd "$_dir/.." && pwd)"          # built-ins only: no dirname
 FAILS=0
 # Tool lookup policy (the same as linux/tests/_kotlin.py): only ABSOLUTE PATH entries are searched. Empty, "." and relative
 # entries would resolve in the current directory, so a program planted there is never found and never run.
@@ -33,14 +32,23 @@ find_tool() {
 ok()   { printf '  ok   %s\n' "$1"; }
 bad()  { printf '  FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
 
+if ! ROOT="$(CDPATH= cd -- "$_dir/.." && pwd)"; then  # built-ins only: no dirname
+  bad "could not resolve the PhoneBridge checkout root"
+  exit 1
+fi
+
 echo "PhoneBridge strict-environment pre-flight"
 
 # bash and python3
 ok "bash ${BASH_VERSION}"
 PY="$(find_tool python3 || true)"
 if [ -n "$PY" ]; then
-  PYV="$("$PY" -I --version 2>&1)"; PYV="${PYV#* }"
-  ok "python3 ${PYV} at ${PY}"
+  if PYV="$("$PY" -I -c 'import sys; sys.exit(1) if sys.version_info < (3, 10) else print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null)" &&
+     [[ "$PYV" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ok "python3 ${PYV} at ${PY}"
+  else
+    bad "python3 at ${PY} failed the version check (Python 3.10 or newer required)"
+  fi
 else
   bad "python3 not on PATH (absolute entries only)"
 fi
@@ -52,11 +60,18 @@ if [ -z "$JAVA_BIN" ]; then
   bad "java not on PATH (absolute entries only)"
 else
   JV="$("$JAVA_BIN" -version 2>&1)"; JRC=$?
-  JFIRST="${JV%%$'\n'*}"; JFIRST="${JFIRST:0:120}"      # first line, at most 120 characters (built-ins only)
-  if [ "$JRC" -eq 0 ] && [[ "$JFIRST" =~ (openjdk|java)\ version\ \"[0-9] ]]; then
-    ok "java at ${JAVA_BIN}: ${JFIRST}"
+  JVERSION=""
+  version_pattern='^((openjdk|java) version "[0-9][A-Za-z0-9._+-]*")([[:space:]]|$)'
+  while IFS= read -r line; do
+    if [[ "$line" =~ $version_pattern ]]; then
+      JVERSION="${BASH_REMATCH[1]}"
+      break
+    fi
+  done <<< "$JV"
+  if [ "$JRC" -eq 0 ] && [ -n "$JVERSION" ]; then
+    ok "java at ${JAVA_BIN}: ${JVERSION}"
   else
-    bad "java at ${JAVA_BIN} does not run correctly (exit ${JRC}): ${JFIRST:-(no output)}"
+    bad "java at ${JAVA_BIN} failed the version check (exit ${JRC})"
   fi
 fi
 
@@ -68,13 +83,14 @@ if [ -n "$XVFB" ]; then ok "xvfb-run at ${XVFB}"; else bad "xvfb-run not on PATH
 if [ -n "$PY" ] && "$PY" -I - >/dev/null 2>&1 <<'PY'
 import gi
 gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); gi.require_version("Gst", "1.0")
+from gi.repository import Gtk, Adw, Gst
 PY
 then ok "GTK 4, libadwaita and GStreamer typelibs import"; else bad "GTK 4 / libadwaita / GStreamer typelibs are not importable by python3"; fi
 if [ -n "$PY" ] && "$PY" -I -c "import venv, ensurepip" >/dev/null 2>&1; then ok "python3 venv and ensurepip available (tools/run_tests.sh builds its venv)"; else bad "python3 venv/ensurepip unavailable"; fi
 
 # Kotlin toolchain, org.json, bcprov, android.jar, and proof that the compiler executes (shared with the test runner)
-if [ -n "$PY" ]; then
-  if ! "$PY" -I "$ROOT/linux/tests/_kotlin.py" check; then FAILS=$((FAILS + 1)); fi
+if [ -n "$PY" ] && ! "$PY" -I "$ROOT/linux/tests/_kotlin.py" check; then
+  bad "Kotlin toolchain check failed"
 fi
 
 if [ "$FAILS" -ne 0 ]; then

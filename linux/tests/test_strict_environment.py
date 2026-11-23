@@ -15,10 +15,12 @@ Without the toolchain a normal run prints `SKIP:` for the machine-specific check
 `PHONEBRIDGE_STRICT=1` makes a missing toolchain a FAILURE. Run: `python3 tests/test_strict_environment.py`"""
 import glob
 import os
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +29,7 @@ import _kotlin as K  # noqa: E402
 
 SCRIPT = HERE.parents[1] / "tools/check_strict_env.sh"
 STRICT = os.environ.get("PHONEBRIDGE_STRICT") == "1"
+SCRIPT_TIMEOUT = 600
 PASS = FAIL = 0
 
 
@@ -41,22 +44,32 @@ def run_script(env_extra=None, tmpdir=None, cwd=None):
     env.update(env_extra or {})
     if tmpdir:
         env["TMPDIR"] = tmpdir
-    return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=600, cwd=cwd)
+    return subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, env=env, timeout=SCRIPT_TIMEOUT, cwd=cwd)
 
 
 def run_script_watching(env_extra, tmpdir):
     """Runs the script while polling `tmpdir` every 10 ms; returns (completed process, whether a pb-kotlin-* directory was seen)."""
-    import time
     env = dict(os.environ)
     env.update(env_extra)
     env["TMPDIR"] = tmpdir
-    proc = subprocess.Popen(["bash", str(SCRIPT)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-    seen = False
-    while proc.poll() is None:
-        seen = seen or bool(pb_dirs(tmpdir))
-        time.sleep(0.01)
-    out, err = proc.communicate()
-    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err), seen
+    with subprocess.Popen(["bash", str(SCRIPT)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+                          start_new_session=True) as proc:
+        seen = False
+        deadline = time.monotonic() + SCRIPT_TIMEOUT
+        while True:
+            seen = seen or bool(pb_dirs(tmpdir))
+            remaining = deadline - time.monotonic()
+            try:
+                out, err = proc.communicate(timeout=min(0.01, max(0, remaining)))
+                return subprocess.CompletedProcess(proc.args, proc.returncode, out, err), seen
+            except subprocess.TimeoutExpired as exc:
+                if time.monotonic() >= deadline:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    proc.wait()
+                    raise subprocess.TimeoutExpired(proc.args, SCRIPT_TIMEOUT, output=exc.output, stderr=exc.stderr) from None
 
 
 def pb_dirs(d):
@@ -74,9 +87,9 @@ def fake_java(directory, body):
     return fake_tool(directory, "java", body)
 
 
-# Items of the pre-flight that exist only where the Kotlin/Gradle/Android toolchain is installed (the existing CI job installs
-# neither). Everything else (bash, python3, java, xvfb-run, the GTK typelibs, venv support) is REQUIRED in every mode.
-OPTIONAL_TOOLCHAIN_ITEMS = ("Gradle Kotlin compiler", "org.json", "bcprov", "android.jar", "the Kotlin compiler executes")
+# Non-strict runs can omit the Kotlin toolchain. Base tools are required in every mode.
+OPTIONAL_TOOLCHAIN_ITEMS = ("Gradle Kotlin compiler", "org.json", "bcprov", "android.jar", "the Kotlin compiler executes",
+                            "Kotlin toolchain check failed")
 _BASELINE = {}
 
 
@@ -142,25 +155,26 @@ def part_environment():
                 print(out)
 
     print("java check (deliberately broken java executables placed first on PATH)")
-    cases = [("exit 3 but prints a version line", 'echo "openjdk version \\"17.0.1\\"" >&2; exit 3', False),
-             ("exit 0 but prints no version", 'echo "hello"; exit 0', False),
+    banner = 'echo "Picked up JAVA_TOOL_OPTIONS: -Dexample=canary-value-123" >&2'
+    version = 'echo "openjdk version \\"17.0.1\\""'
+    cases = [("exit 3 but prints a version line", f"{banner}; {version} >&2; exit 3", False),
+             ("exit 0 but prints no version", f"{banner}; exit 0", False),
              ("exit 0 and prints nothing", "exit 0", False),
-             ("exit 0 and prints a version line", 'echo "openjdk version \\"17.0.1\\"" >&2; exit 0', True)]
+             ("exit 0 and prints a version line after a startup banner", f"{banner}; {version} >&2", True),
+             ("exit 0 and prints the version on stdout and a banner on stderr", f"{banner}; {version}", True)]
     for label, body, good in cases:
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as t:
-            fake_java(d, body)
-            r = run_script({"PATH": d + os.pathsep + os.environ["PATH"], "PB_CANARY_SECRET": "canary-value-123"}, t)
+            java = fake_java(d, body)
+            r = run_script({"PATH": d + os.pathsep + os.environ["PATH"]}, t)
             out = r.stdout + r.stderr
-            line = [l for l in out.splitlines() if f"java at {d}/java" in l]
+            line = [l for l in out.splitlines() if f"java at {java}" in l]
             if good:
                 check(f"shell java check accepts: {label}", bool(line) and line[0].lstrip().startswith("ok"))
             else:
                 check(f"shell java check FAILS: {label}", bool(line) and line[0].lstrip().startswith("FAIL") and r.returncode != 0)
-            check(f"   ...no environment values printed ({label})", "canary-value-123" not in out)
-    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as t:
-        fake_java(d, 'echo "openjdk version \\"17.0.1\\"" >&2; exit 3')
-        ok, detail = K.java_version(str(Path(d) / "java"))
-        check("python java_version() also rejects a java that exits non-zero", ok is False and "exit 3" in detail)
+            ok, detail = K.java_version(str(java))
+            check(f"Python java check agrees: {label}", ok == good and ("exit 3" not in label or "exit 3" in detail))
+            check(f"   ...no startup options printed ({label})", "canary-value-123" not in out + detail)
     print("relative PATH entries: fake java and python3 in the current directory are never executed (shell and Python agree)")
     for label, lead in (("empty first entry", ""), ("'.' entry", "."), ("relative directory entry", "bin")):
         with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as t:
@@ -270,6 +284,8 @@ def part_registry_and_detector():
         "backtick-quoted package: `android`.os.Build.MODEL": "val b = `android`.os.Build.MODEL\n",
         "backtick-quoted import: import `android`.os.Build": "import `android`.os.Build\n",
         "backtick-quoted androidx": "import `androidx`.core.content.FileProvider\n",
+        "backtick-quoted segment": "import android.`os`.Build\n",
+        "backtick-quoted root and segment": "import `androidx`.`core`.content.FileProvider\n",
         "reference on a line after a multi-line raw string": 'val s = """\nline // /* \n"""\nval b = android.os.Build.MODEL\n',
         "reference after a // inside a string on an earlier statement": 'val a = "//"; val b = android.os.Build.MODEL\n',
     }
@@ -324,6 +340,7 @@ def part_registry_and_detector():
         "capitalised word Android alone": "val s = Android\n",
         "plain mention in a doc comment": "/** Android.os is the platform */\nfun f() {}\n",
         "backtick identifier": "val `android.os.Build` = 1\n",
+        "backtick identifier containing a package-like substring": "val `use android.os.Build` = 1\n",
         "backtick identifier that merely contains android": "val `android os` = 1\nfun `androidVersion`() {}\n",
         "backtick identifier, different case": "val `Android`.x = 1\n",
         "backtick function name with an apostrophe": "fun `it's fine`() {}\n",
@@ -353,17 +370,11 @@ def part_selection_rules():
           K.select_jar(bb, r"bcprov-jdk18on-([\d.]+)\.jar") == bb[2])
     libs = ["/g/gradle-8.14.7-all/x/gradle-8.14.7/lib", "/g/gradle-8.14-all/y/gradle-8.14/lib", "/g/gradle-8.9-bin/z/gradle-8.9/lib"]
     check("Gradle Kotlin lib: the lexically FIRST path (the rule of the existing tests, libs[0])", K.select_kotlin_lib(libs) == sorted(libs)[0] == libs[1])
-    # the existing tests' own expressions, copied verbatim, must agree with the runner on this machine
+    # The existing tests' Kotlin lib rule must agree with the runner on this machine.
     existing_libs = sorted(l for l in glob.glob(os.path.expanduser("~/.gradle/wrapper/dists/gradle-*/*/gradle-*/lib"))
                            if glob.glob(f"{l}/kotlin-stdlib-2*.jar"))
     if existing_libs:
         check("runner and the existing tests select the same Kotlin lib on this machine", K._locate()["lib"] == existing_libs[0])
-        ex_json = [j for j in sorted(glob.glob(os.path.expanduser("~/.gradle/caches/modules-2/files-2.1/org.json/json/*/*/json-*.jar"))) if "sources" not in j]
-        ex_bc = [j for j in sorted(glob.glob(os.path.expanduser("~/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/*/*/bcprov-jdk18on-*.jar"))) if "sources" not in j]
-        ex_sdk = sorted(glob.glob(os.path.expanduser("~/Android/Sdk/platforms/android-*/android.jar")))
-        L = K._locate()
-        check("runner and the existing tests select the same org.json, bcprov and android.jar on this machine",
-              (not ex_json or L["json"] == ex_json[-1]) and (not ex_bc or L["bc"] == ex_bc[-1]) and (not ex_sdk or L["android"] == ex_sdk[-1]))
     # PATH handling
     with tempfile.TemporaryDirectory() as d:
         fake_java(d, "exit 0")

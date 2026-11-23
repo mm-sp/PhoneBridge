@@ -12,6 +12,7 @@ import time
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -51,7 +52,10 @@ async def main_async() -> int:
 
     server = transport.ControlChannelServer(port=PORT)
     await server.start()
-    pc = PcControl(server, asyncio.get_running_loop(), clipboard_text=lambda: "")
+    # Run the expiry sweeps explicitly below without scheduling background sweeps.
+    pc_loop = Mock(wraps=asyncio.get_running_loop())
+    pc_loop.call_later.return_value = None
+    pc = PcControl(server, pc_loop, clipboard_text=lambda: "")
     serve = asyncio.ensure_future(server.serve_forever())
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
