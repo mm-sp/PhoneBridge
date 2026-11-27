@@ -23,6 +23,7 @@ log = logging.getLogger("phonebridge.phone_fs")
 
 CACHE_ROOT = Path.home() / ".cache" / "phonebridge" / "mount"
 LIST_TTL = 20.0
+LIST_TIMEOUT = 20.0
 FETCH_TIMEOUT = 900.0
 
 
@@ -43,16 +44,31 @@ class ServerBackend:
 
     def list(self, path: str) -> dict:
         async def go() -> dict:
-            fut = self._loop.create_future()
-            self._waiting[path] = fut
-            await self._server.send(self._fp, "control", "files.list", {"path": path})
-            return await asyncio.wait_for(fut, 20)
+            # File managers ask about one folder from several threads at once: they all share one request and its answer.
+            fut = self._waiting.get(path)
+            ask = fut is None or fut.done()
+            if ask:
+                fut = self._waiting[path] = self._loop.create_future()
+            try:
+                if ask and not await self._server.send(self._fp, "control", "files.list", {"path": path}):
+                    fut.set_exception(OSError(errno.ENOTCONN, "phone not connected"))
+                return await asyncio.wait_for(asyncio.shield(fut), LIST_TIMEOUT)
+            except BaseException:
+                if self._waiting.get(path) is fut:
+                    del self._waiting[path]   # give up on this request: the next caller asks again
+                raise
 
+        return self._wait(go(), LIST_TIMEOUT + 5)
+
+    def _wait(self, coro, timeout: float):
+        """Runs `coro` on the server's loop from a file-system thread. Every failure becomes an OSError with an errno
+        (FUSE needs one; a timeout is an OSError without it)."""
         try:
-            return asyncio.run_coroutine_threadsafe(go(), self._loop).result(25)
+            return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
         except Exception as exc:  # noqa: BLE001
-            self._waiting.pop(path, None)
-            raise OSError(errno.EIO, str(exc)) from exc
+            if isinstance(exc, OSError) and exc.errno:
+                raise
+            raise OSError(errno.EIO, str(exc) or type(exc).__name__) from exc
 
     def fetch(self, path: str, cache_dir: Path) -> Path:
         from . import file_transfer
@@ -66,12 +82,7 @@ class ServerBackend:
             finally:
                 file_transfer.cancel_fetch(path)
 
-        try:
-            return asyncio.run_coroutine_threadsafe(go(), self._loop).result(FETCH_TIMEOUT + 5)
-        except OSError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise OSError(errno.EIO, str(exc)) from exc
+        return self._wait(go(), FETCH_TIMEOUT + 5)
 
 
 def make_operations(backend, fingerprint: str):
@@ -162,7 +173,8 @@ class Mount:
     """One mounted phone. mount() returns an error string or None; unmount() is idempotent."""
 
     def __init__(self, server, loop, fingerprint: str, phone_name: str, mountpoint: Path | None = None) -> None:
-        safe = "".join(c if c.isalnum() or c in " -_." else "_" for c in phone_name).strip() or "phone"
+        # No leading dots: a phone named "." or ".." must not move the mount point onto ~/PhoneBridge or the home folder.
+        safe = "".join(c if c.isalnum() or c in " -_." else "_" for c in phone_name).strip(" .") or "phone"
         self.path = mountpoint or (Path.home() / "PhoneBridge" / safe)
         self._server, self._loop, self._fp = server, loop, fingerprint
         self._thread: threading.Thread | None = None
