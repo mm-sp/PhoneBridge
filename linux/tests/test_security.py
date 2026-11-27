@@ -273,11 +273,91 @@ async def server_tests(tmp):
     await asyncio.sleep(0.3)
     check("'ask' with approval allows it, asking only once per connection", got.count("notification.posted") == 2 and asked == ["notifications"])
 
+    # a Deny set after an "ask" approval applies at once, not only after a reconnect
+    P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "notifications", P.DENY)
+    await ph.send("notification.posted", {"app": "z"})
+    d_after = await ph.recv()
+    check("denying a feature overrides the approval given earlier in this connection",
+          d_after.type == "permission.denied" and got.count("notification.posted") == 2)
+
+    # "no" is an answer too: it lasts for the connection, without a new prompt for every following message
+    P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "sms", P.ASK)
+    asked.clear()
+
+    async def refuse(device, feature):
+        asked.append(feature)
+        return False
+    server.ask_callback = refuse
+    replies = []
+    for body in ("a", "b", "c"):
+        await ph.send("sms.new", {"body": body})
+        replies.append((await ph.recv()).type)
+    check("a refused 'ask' stays refused for the connection and prompts once",
+          replies == ["permission.denied"] * 3 and asked == ["sms"] and "sms.new" not in got)
+
+    # an unanswered prompt: not repeated for every message, but asked again later
+    P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "calls", P.ASK)
+    asked.clear()
+    real_timeout, real_retry = transport.ASK_TIMEOUT, transport.ASK_RETRY_SECONDS
+    transport.ASK_TIMEOUT, transport.ASK_RETRY_SECONDS = 0.1, 3.0
+
+    async def silent(device, feature):
+        asked.append(feature)
+        await asyncio.sleep(30)
+    server.ask_callback = silent
+    for _ in range(3):
+        await ph.send("call.state", {})
+        await ph.recv()
+    check("an unanswered prompt is not raised again straight away", asked == ["calls"])
+    await asyncio.sleep(3.2)
+    await ph.send("call.state", {})
+    await ph.recv()
+    check("…but is asked again after a while", asked == ["calls", "calls"])
+    # while a prompt is open nothing else is read, so the PC keeps telling the phone that the link is alive
+    P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "apps", P.ASK)
+    real_alive = transport.ASK_KEEPALIVE_SECONDS
+    transport.ASK_TIMEOUT, transport.ASK_KEEPALIVE_SECONDS = 0.7, 0.2
+    cancelled = []
+
+    async def pondering(device, feature):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.append(feature)
+            raise
+    server.ask_callback = pondering
+    await ph.send("apps.list", {})
+    seen = [(await ph.recv()).type]
+    while seen[-1] == "pong" and len(seen) < 10:
+        seen.append((await ph.recv()).type)
+    check("an open prompt keeps the link audibly alive until it times out",
+          len(seen) >= 3 and seen[-1] == "permission.denied" and set(seen[:-1]) == {"pong"})
+    check("…and the prompt that timed out is cancelled", cancelled == ["apps"])
+
+    async def slow_yes(device, feature):
+        await asyncio.sleep(0.5)
+        return True
+    P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "files", P.ASK)
+    server.ask_callback = slow_yes
+    await ph.send("file.offer", {"transfer_id": "slow", "size": 1})
+    await ph.send("ping", {})
+    await ph.send("sms.new", {"body": "refused earlier on this connection: marks the end of the pongs"})
+    seen = [(await ph.recv()).type]
+    while seen[-1] == "pong" and len(seen) < 10:
+        seen.append((await ph.recv()).type)
+    check("a late yes is honoured, with the link kept alive meanwhile",   # at least one keepalive and the ping's answer
+          seen[-1] == "permission.denied" and len(seen) >= 3 and set(seen[:-1]) == {"pong"} and "file.offer" in got)
+    transport.ASK_TIMEOUT, transport.ASK_RETRY_SECONDS = real_timeout, real_retry
+    transport.ASK_KEEPALIVE_SECONDS = real_alive
+    server.ask_callback = approve
+
     # photos vs files route by photo_id
     P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "photos", P.DENY)
     await ph.send("file.offer", {"transfer_id": "t", "photo_id": "p1", "size": 1})
     d3 = await ph.recv()
     check("a photo offer is judged as 'photos', not 'files'", d3.type == "permission.denied" and d3.payload["feature"] == "photos")
+    check("a refused offer is named, so the phone can end that upload", d3.payload.get("transfer_id") == "t")
+    check("other refusals repeat nothing from the request", set(d_after.payload) == {"feature", "type"})
 
     check("remote_control mirrors the legacy allow_pc_control flag",
           P.mode_of(pairing.PairedDevice.load(dev.fingerprint), "remote_control") == P.DENY)

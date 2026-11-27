@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from phonebridge import crypto, pairing, transport  # noqa: E402
 from phonebridge.protocol import Envelope  # noqa: E402
+from phonebridge.security import permissions  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -52,6 +53,7 @@ async def main_async() -> int:
                                   identity_pub=ident.public_b64)
     device.save()
 
+    transport.VIDEO_POLICY_SECONDS = 0.05   # so a permission change is picked up within the test's short waits
     server = transport.ControlChannelServer(port=0)
     await server.start()
     real_port = server._server.sockets[0].getsockname()[1]  # noqa: SLF001
@@ -103,6 +105,29 @@ async def main_async() -> int:
 
     check("control messages still dispatch correctly alongside the live video stream",
           len(received_control) == 1 and received_control[0].payload["battery_pct"] == 99)
+
+    print("3b. switching the screen permission off stops a stream that is already running")
+
+    async def send_frame(data: bytes) -> bool:
+        before = len(received_frames)
+        video_writer.write(crypto.pack_frame(cipher.encrypt(data)))
+        await video_writer.drain()
+        await asyncio.sleep(0.2)
+        return len(received_frames) > before
+
+    permissions.set_mode(pairing.PairedDevice.load(device.fingerprint), "screen", permissions.DENY)
+    await asyncio.sleep(0.1)
+    check("with screen=deny no further frame reaches the viewer", not await send_frame(b"denied"))
+    permissions.set_mode(pairing.PairedDevice.load(device.fingerprint), "screen", permissions.ASK)
+    await asyncio.sleep(0.1)
+    check("with screen=ask and no approval for this session, nothing either", not await send_frame(b"unasked"))
+    server.get_connection(device.fingerprint).granted.add("screen")
+    check("…once approved for this session, frames flow", await send_frame(b"approved"))
+    server.get_connection(device.fingerprint).granted.clear()
+    permissions.set_mode(pairing.PairedDevice.load(device.fingerprint), "screen", permissions.ALLOW)
+    await asyncio.sleep(0.1)
+    check("allowing it again resumes the same video connection", await send_frame(b"allowed"))
+    del received_frames[3:]
 
     print("4. clearing the sink stops delivery without breaking the connection")
     server.set_video_sink(device.fingerprint, None)

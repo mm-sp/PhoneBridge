@@ -33,6 +33,12 @@ DEFAULT_PORT = 28100
 # (e.g. the PC or phone moved to another network and TCP never got a reset).
 IDLE_TIMEOUT = 100
 FIRST_FRAME_TIMEOUT = 15
+ASK_TIMEOUT = 60          # an unanswered "ask" prompt counts as "no"
+ASK_RETRY_SECONDS = 120   # ...and the same feature is not asked again on that connection for this long
+# Nothing is read (so no ping is answered) while a prompt is open, and the phone drops a link that is silent for 90 s:
+# an unsolicited pong this often keeps it up, also when prompts for several features follow one another.
+ASK_KEEPALIVE_SECONDS = 20
+VIDEO_POLICY_SECONDS = 1.0   # how long a "screen" permission answer is reused for incoming video frames
 MAX_IDENT_LINE = 200
 THROTTLE_EXEMPT = ("127.0.0.1", "::1")   # the USB tunnel arrives from loopback; see ControlChannelServer._fail
 UNPAIRED_MARKER = b"PBUNPAIRED\n"
@@ -65,6 +71,8 @@ class DeviceConnection:
         self.session = None   # secure_session.Session once the v4 handshake has run
         self.session_id = uuid.uuid4().hex   # names this connection in the audit ledger
         self.granted: set[str] = set()       # features the user approved ("ask") for this connection only
+        # "ask" feature -> monotonic time before which it is not asked again (infinite after the user said no)
+        self.ask_not_before: dict[str, float] = {}
         self.link = "lan"                    # "usb" | "lan" | "relay": how the phone reached the PC (see handle_stream)
 
     SEQ_WINDOW = 256
@@ -278,6 +286,7 @@ class ControlChannelServer:
         self._handlers: dict[str, list[Handler]] = {}
         self._connections: dict[str, DeviceConnection] = {}
         self._video_sinks: dict[str, VideoSink] = {}
+        self._video_policy: dict[str, tuple[float, str]] = {}   # fingerprint -> (valid until, "screen" mode)
         self._connection_listeners: list[ConnectionListener] = []
         self._server: asyncio.AbstractServer | None = None
         self._discovery: asyncio.DatagramTransport | None = None
@@ -347,17 +356,55 @@ class ControlChannelServer:
 
         device = PairedDevice.load(conn.fingerprint)
         mode = perms.mode_of(device, feature) if device else perms.DENY
-        if mode == perms.ASK and feature not in conn.granted and self.ask_callback is not None:
+        if mode == perms.ASK and feature not in conn.granted and self.ask_callback is not None \
+                and time.monotonic() >= conn.ask_not_before.get(feature, 0.0):
             try:
-                if await asyncio.wait_for(self.ask_callback(device, feature), 60):
+                if await asyncio.wait_for(self._ask_keeping_link(conn, device, feature), ASK_TIMEOUT):
                     conn.granted.add(feature)
+                else:
+                    conn.ask_not_before[feature] = float("inf")   # "no" lasts for this connection, like "yes"
             except Exception:  # noqa: BLE001 - timeout or UI failure counts as "no"
-                pass
-        if mode == perms.ALLOW or feature in conn.granted:
+                # Nobody answered: don't stack a new prompt (and stall the link again) for every following message.
+                conn.ask_not_before[feature] = time.monotonic() + ASK_RETRY_SECONDS
+        if mode == perms.ALLOW or (mode == perms.ASK and feature in conn.granted):
             return True
         self.audit(sec_ledger.DENIED, conn.fingerprint, feature=feature, message=envelope.type, mode=mode)
-        await conn.send("control", "permission.denied", {"feature": feature, "type": envelope.type})
+        denial = {"feature": feature, "type": envelope.type}
+        if envelope.type == "file.offer" and "transfer_id" in envelope.payload:
+            denial["transfer_id"] = str(envelope.payload["transfer_id"])   # so the phone can end that upload at once
+        await conn.send("control", "permission.denied", denial)
         return False
+
+    async def _ask_keeping_link(self, conn: "DeviceConnection", device: PairedDevice, feature: str) -> bool:
+        """ask_callback's answer, telling the phone meanwhile that the link is alive (ASK_KEEPALIVE_SECONDS).
+        Cancelling this cancels the prompt."""
+        answer = asyncio.ensure_future(self.ask_callback(device, feature))
+        try:
+            while not (await asyncio.wait({answer}, timeout=ASK_KEEPALIVE_SECONDS))[0]:
+                try:
+                    await conn.send("control", "pong", {})
+                except ConnectionError:
+                    pass   # the read loop notices a dead link once the prompt is over
+            return answer.result()
+        finally:
+            answer.cancel()
+
+    def _video_sink(self, fingerprint: str) -> VideoSink | None:
+        """Where an incoming video frame goes, over TCP or UDP: the registered viewer, and only while the "screen"
+        permission still allows this phone's live session, so switching it off also stops a running stream. The stored
+        policy is re-read at most every VIDEO_POLICY_SECONDS (frames arrive far more often than that)."""
+        sink = self._video_sinks.get(fingerprint)
+        owner = self._connections.get(fingerprint)
+        if sink is None or owner is None or self.locked_down:
+            return None
+        now = time.monotonic()
+        expires, mode = self._video_policy.get(fingerprint, (0.0, perms.DENY))
+        if now >= expires:
+            device = PairedDevice.load(fingerprint)
+            mode = perms.mode_of(device, "screen") if device else perms.DENY
+            self._video_policy[fingerprint] = (now + VIDEO_POLICY_SECONDS, mode)
+        allowed = mode == perms.ALLOW or (mode == perms.ASK and "screen" in owner.granted)
+        return sink if allowed else None
 
     def _udp_key_for(self, fingerprint: str) -> bytes | None:
         conn = self._connections.get(fingerprint)
@@ -446,7 +493,7 @@ class ControlChannelServer:
 
             actual_port = self._server.sockets[0].getsockname()[1]
             self._udp_video = udp_video.UdpVideoEndpoint(
-                self._video_sinks.get, on_stream=lambda fp: self.video_transport.__setitem__(fp, "udp"),
+                self._video_sink, on_stream=lambda fp: self.video_transport.__setitem__(fp, "udp"),
                 key_for=self._udp_key_for)
             await loop.create_datagram_endpoint(lambda: self._udp_video, local_addr=("0.0.0.0", actual_port))  # nosec B104 - filtered by session key + peer policy
         except OSError as exc:
@@ -710,7 +757,7 @@ class ControlChannelServer:
                 if first:   # state changes only once the peer has proven it holds the session key
                     first = False
                     self.video_transport[fingerprint] = "tcp"
-                sink = self._video_sinks.get(fingerprint)
+                sink = self._video_sink(fingerprint)
                 if sink is not None:
                     sink(frame)
         except (asyncio.IncompleteReadError, ConnectionError, Exception) as exc:  # noqa: BLE001

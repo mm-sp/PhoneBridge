@@ -120,8 +120,11 @@ class PhoneBridgeApp(Adw.Application):
 
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
+        dialogs = self._close_when_abandoned(fut)
 
         def show() -> bool:
+            if fut.done():   # already given up on before the GTK thread got here
+                return False
             win = self.get_active_window()
             dialog = Adw.MessageDialog(transient_for=win, heading=f"Allow {FEATURES[feature]}?",
                                        body=f"{device.name} wants to use “{FEATURES[feature]}” on this PC. "
@@ -131,11 +134,26 @@ class PhoneBridgeApp(Adw.Application):
             dialog.set_response_appearance("allow", Adw.ResponseAppearance.SUGGESTED)
             dialog.connect("response", lambda _d, r: loop.call_soon_threadsafe(
                 lambda: fut.done() or fut.set_result(r == "allow")))
+            dialogs.append(dialog)
             dialog.present()
             return False
 
         GLib.idle_add(show)
         return await fut
+
+    @staticmethod
+    def _close_when_abandoned(fut) -> list:
+        """The caller stops waiting for a prompt after a minute. Returns a list for the prompt's dialog: it is closed
+        then, so nobody clicks "Allow" on a question whose answer no longer counts."""
+        dialogs: list = []
+
+        def close() -> bool:
+            for dialog in dialogs:
+                dialog.close()
+            return False
+
+        fut.add_done_callback(lambda f: f.cancelled() and GLib.idle_add(close))
+        return dialogs
 
     async def _ask_pc_control(self, device) -> int:
         """A phone asked for PC control while it is off: ask the person at the PC. Returns minutes granted (0 = refused).
@@ -144,8 +162,11 @@ class PhoneBridgeApp(Adw.Application):
 
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
+        dialogs = self._close_when_abandoned(fut)
 
         def show() -> bool:
+            if fut.done():
+                return False
             dialog = Adw.MessageDialog(
                 transient_for=self.get_active_window(), heading="Allow this phone to control your PC?",
                 body=f"“{device.name}” is asking for remote control of this PC: a shell, your files, mouse and keyboard, "
@@ -159,6 +180,7 @@ class PhoneBridgeApp(Adw.Application):
             dialog.set_response_appearance("60", Adw.ResponseAppearance.DESTRUCTIVE)
             dialog.connect("response", lambda _d, r: loop.call_soon_threadsafe(
                 lambda: fut.done() or fut.set_result(int(r) if r in ("15", "60") else 0)))
+            dialogs.append(dialog)
             dialog.present()
             return False
 
@@ -230,7 +252,7 @@ PHONE_MESSAGE_TYPES = (
     "video.started", "video.stopped", "mirror.status", "webcam.status",
     "screen.state", "volume.state",
     "load.progress", "device.unpair",
-    "error",
+    "error", "permission.denied",
 )
 
 

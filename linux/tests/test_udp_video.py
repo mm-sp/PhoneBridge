@@ -178,6 +178,31 @@ async def main_async() -> int:
           st.accept_counter(b"e2\0", 1) and not st.accept_counter(b"e1\0", 10 ** 6) and st.accept_counter(b"e2\0", 2))
     spoof_tr.close()
 
+    print("6. the screen permission applies to UDP video too")
+    from phonebridge.security import permissions
+    transport.VIDEO_POLICY_SECONDS = 0.05
+
+    async def send_key(fid: int, data: bytes) -> bool:
+        frames.clear()
+        tr.sendto(phone2.seal(uv.T_VIDEO, uv.fragment(fid, data, True)[0]))
+        await asyncio.sleep(0.2)
+        return frames == [data]
+
+    permissions.set_mode(pairing.PairedDevice.load(fp), "screen", permissions.DENY)
+    await asyncio.sleep(0.1)
+    check("with screen=deny a running UDP stream reaches no viewer", not await send_key(50, b"denied") and frames == [])
+    permissions.set_mode(pairing.PairedDevice.load(fp), "screen", permissions.ASK)
+    await asyncio.sleep(0.1)
+    check("with screen=ask and no approval for this session, nothing either", not await send_key(51, b"unasked"))
+    server.get_connection(fp).granted.add("screen")
+    check("…once approved for this session, frames flow", await send_key(52, b"approved"))
+    permissions.set_mode(pairing.PairedDevice.load(fp), "screen", permissions.DENY)
+    await asyncio.sleep(0.1)
+    check("an earlier approval does not override a later deny", not await send_key(53, b"denied-again"))
+    permissions.set_mode(pairing.PairedDevice.load(fp), "screen", permissions.ALLOW)
+    await asyncio.sleep(0.1)
+    check("allowing it again resumes the same stream", await send_key(54, b"allowed"))
+
     tr.close()
     server._udp_video.close()  # noqa: SLF001
     shutil.rmtree(tmp.parent, ignore_errors=True)
