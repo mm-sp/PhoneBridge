@@ -1,6 +1,12 @@
 # Changelog
 
 ## 1.5.0 - unreleased
+- Transferring the same file twice at the same time (a double click, or sending it again while it is still going) could save a damaged copy that was reported as complete; each transfer now writes its own partial file, on the PC and on the phone.
+- The Security page is up to date when opened with no phone connected (newly paired devices, events, who is connected) and follows a phone connecting or disconnecting while it is open.
+- Connecting a different phone no longer leaves the previous phone's conversations, open message and draft, call history, contacts, photos, file listing and apps on the PC's tabs (a reply typed there could be sent from the new phone to the old phone's contact).
+- A file or photo from the phone that cannot arrive (connection lost, damaged data, no free space, nothing sent for two minutes) is now shown as failed on the PC instead of staying "Requesting…" or "Receiving…". Uploads that keep delivering are no longer abandoned after an hour.
+- Files tab: "This folder is empty" and folder error messages are shown again; downloading a file a second time makes "Open" open the new copy, and "Cancel" no longer also cancels earlier transfers of that row.
+- Two phones connecting at the same moment can no longer both be accepted; a failure while the PC sets up a new connection no longer leaves it answering every other phone "busy".
 - When the phone refuses a request (a permission set to Deny, an "Ask" prompt refused or unanswered), the PC now says which permission it was: texts are marked as not sent, the "Calling…" banner goes away, loading bars, photo and file downloads, file sending, screen mirroring and camera stop waiting. Before, they stayed pending or blamed the connection.
 - Android: requests that only read data and arrive while an "Ask" prompt is open (for example contacts right after call history) now wait for your answer instead of being refused.
 - Connecting no longer makes the phone ask for the "Remote control of this phone" permission.
