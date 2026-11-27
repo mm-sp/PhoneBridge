@@ -64,19 +64,27 @@ class ClipboardBridge:
             msg = json.loads(line)
         except ValueError:
             msg = {}
+        self._handle_message(msg)
+        self._read(stream)
+
+    def _handle_message(self, msg: dict) -> None:
         text = msg.get("changed")
         if text:
             self._current = text
             self._on_changed(text)
-        elif msg.get("changed_image") and self._on_image_changed:
-            self._on_image_changed(msg["changed_image"])
-        self._read(stream)
+        elif msg.get("replaced"):
+            self._current = None   # no longer our synced text: expiry must leave it alone
+        elif msg.get("changed_image"):
+            self._current = None
+            if self._on_image_changed:
+                self._on_image_changed(msg["changed_image"])
 
     def _on_gtk_changed(self, clipboard) -> None:
         from .. import privacy
 
         formats = clipboard.get_formats()
         if any(formats.contain_mime_type(m) for m in privacy.SENSITIVE_CLIPBOARD_MIMES):
+            self._current = None
             return   # a password manager's copy: not forwarded, not stored
         clipboard.read_text_async(None, self._on_gtk_read)
 
@@ -84,8 +92,11 @@ class ClipboardBridge:
         try:
             text = clipboard.read_text_finish(result)
         except GLib.Error:
+            if not clipboard.is_local():
+                self._current = None   # another program copied something that isn't text
             return
         if text and text != self._fallback_last:
+            self._current = text
             self._fallback_last = text
             self._on_changed(text)
 
@@ -118,6 +129,7 @@ class ClipboardBridge:
 
     def set_image(self, b64: str) -> None:
         """Put an image (base64 PNG/JPEG) on the PC clipboard."""
+        self._current = None   # the image replaces any synced text: its expiry must not wipe the image
         if self._proc is not None and self._stdin is not None:
             data = (json.dumps({"set_image": b64}) + "\n").encode()
             self._stdin.write_bytes(GLib.Bytes.new(data), None)

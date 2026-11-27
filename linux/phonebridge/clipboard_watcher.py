@@ -8,6 +8,7 @@ GDK_BACKEND=x11 and talks to the app over stdin/stdout, one JSON object per line
     stdout: {"changed": "<text>"}     whenever the desktop clipboard text changes
     stdout: {"changed_image": "<base64 PNG>"}   when an image (<= 4 MiB) is copied
     stdin:  {"set": "<text>"}         put text on the clipboard (e.g. from the phone)
+    stdout: {"replaced": true}          another program copied something that isn't forwarded as text
     stdin:  {"set_image": "<base64 PNG/JPEG>"}  put an image on the clipboard
 
 Run as: python -m phonebridge.clipboard_watcher
@@ -46,13 +47,22 @@ class Watcher:
         # Password managers tag what they copy; that must never leave the PC (or be stored in the history).
         formats = clipboard.get_formats()
         if any(formats.contain_mime_type(m) for m in SENSITIVE_MIMES):
+            self._report_replaced(clipboard)   # only the fact, never the content
             return
         clipboard.read_text_async(None, self._on_read)
+
+    @staticmethod
+    def _report_replaced(clipboard: Gdk.Clipboard) -> None:
+        """Another program put something there that isn't reported as text: the app must know, so that expiring the
+        phone's text later doesn't wipe it."""
+        if not clipboard.is_local():
+            print(json.dumps({"replaced": True}), flush=True)
 
     def _on_read(self, clipboard: Gdk.Clipboard, result) -> None:
         try:
             text = clipboard.read_text_finish(result)
         except GLib.Error:
+            self._report_replaced(clipboard)
             self._maybe_read_image(clipboard)  # non-text content: an image, files…
             return
         if text and text != self._last:
