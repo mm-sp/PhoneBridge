@@ -89,6 +89,7 @@ def main():
     check("an http:// update URL is refused", refused(lambda: updates.check_for_update("http://example.com/x", "1.3.0"), "https://"))
     (host / "phonebridge-9.9.9.whl").write_bytes(os.urandom(5000))       # a swapped artifact on the host
     check("an artifact swapped on the host fails the signed hash", refused(lambda: updates.check_for_update(host.as_uri(), "1.3.0", tmp / "dl2"), "does not match"))
+    check("…and the swapped download is not left on disk", not (tmp / "dl2" / "9.9.9" / "phonebridge-9.9.9.whl").exists())
     check("no update when already current or newer", refused(lambda: updates.check_for_update(host.as_uri(), "9.9.9"), "not newer"))
     check("the CLI reports verification success/refusal with an exit code", subprocess.run(
         [sys.executable, "-m", "phonebridge.updates", "check", host.as_uri()], capture_output=True, text=True, cwd=str(HERE.parents[0]),

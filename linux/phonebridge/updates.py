@@ -133,7 +133,11 @@ def check_for_update(base_url: str, current_version: str, download_dir: Path | N
         for name, entry in manifest.artifacts.items():
             path = target / name
             path.write_bytes(_fetch(base_url, name, int(entry.get("size", 0)) + 1))
-            verify_artifact(path, manifest, name)   # a download that doesn't match is deleted, not kept
+            try:
+                verify_artifact(path, manifest, name)
+            except UpdateError:
+                path.unlink(missing_ok=True)   # a download that doesn't match is deleted: nobody can install it by mistake
+                raise
             saved.append(path)
     return manifest, saved
 
