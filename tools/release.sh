@@ -9,7 +9,9 @@ GRADLE="${GRADLE:-$(ls -d ~/.gradle/wrapper/dists/gradle-*-all/*/gradle-*/bin/gr
 BT="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/* | sort -V | tail -1)"
 VER="$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)"
 [ -f "${PHONEBRIDGE_SIGNING_PROPERTIES:-$HOME/.config/phonebridge-android-release/keystore.properties}" ] || [ -f keystore.properties ] || [ -n "${PHONEBRIDGE_KEYSTORE:-}" ] || { echo "No signing credentials: refusing to make an unsigned/debug-signed 'release'" >&2; exit 1; }
-"$GRADLE" --offline :app:assembleDebug :app:assembleRelease :app:bundleRelease -q 2>&1 | grep -v '^w:' || true
+# Only the filter may "fail" (nothing left to print). A failed build must stop here (pipefail), never go on to package the
+# outputs of an earlier build.
+"$GRADLE" --offline :app:assembleDebug :app:assembleRelease :app:bundleRelease -q 2>&1 | { grep -v '^w:' || true; }
 OUT="$ROOT/dist/$VER"; mkdir -p "$OUT"
 cp app/build/outputs/apk/release/app-release.apk "$OUT/phonebridge-$VER.apk"
 cp app/build/outputs/bundle/release/app-release.aab "$OUT/phonebridge-$VER.aab"
