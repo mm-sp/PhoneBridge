@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/banner.png" alt="PhoneBridge: your Android phone and Linux desktop, directly connected" width="100%">
+</p>
+
 # PhoneBridge
 
 Securely connect and control your Android phone and Linux PC with wireless and USB connectivity. An account-free, cloud-free bridge between an **Android phone** and a **Linux desktop**: notifications, SMS/MMS, calls, photos, files, clipboard, screen mirroring with control, phone-as-webcam, and (opt-in) controlling the PC from the phone. Everything travels directly between your two devices, end-to-end encrypted.
