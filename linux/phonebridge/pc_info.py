@@ -73,13 +73,17 @@ def _battery() -> dict:
 def _wifi() -> dict:
     try:
         out = subprocess.run(["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL", "dev", "wifi"],
-                             capture_output=True, text=True, timeout=3).stdout
+                             capture_output=True, text=True, errors="replace", timeout=3,
+                             # untranslated values ("yes"), with non-ASCII network names intact
+                             env={**os.environ, "LC_ALL": "C.UTF-8", "LANGUAGE": ""}).stdout
     except (OSError, subprocess.TimeoutExpired):
         return {}
     for line in out.splitlines():
-        parts = line.split(":")
-        if parts and parts[0] == "yes" and len(parts) >= 3:
-            return {"wifi_ssid": parts[1], "wifi_signal_pct": int(parts[2] or 0)}
+        active, _, rest = line.partition(":")
+        ssid, sep, signal = rest.rpartition(":")  # the name may itself contain ":" (printed as "\:")
+        if active == "yes" and sep:
+            return {"wifi_ssid": re.sub(r"\\(.)", r"\1", ssid),
+                    "wifi_signal_pct": int(signal) if signal.isdecimal() else 0}
     return {}
 
 
