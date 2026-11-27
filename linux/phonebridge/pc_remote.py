@@ -11,6 +11,7 @@ signals there); app.py hops onto it with GLib.idle_add.
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 from pathlib import Path
 
@@ -57,17 +58,24 @@ class RemoteDesktop:
         # "Allow remote interaction" off in the dialog, which grants viewing only.
         self.devices = 0
         self._starting = False
+        self._attempt = 0  # portal replies belonging to an abandoned attempt are ignored
         self._waiters: list = []
         self._closed_sub = 0
 
     @property
     def ready(self) -> bool:
-        return self.session is not None
+        """True only once the session has actually started. A session handle exists from the first step, while the
+        PC's owner may still be looking at (or about to refuse) the dialog."""
+        return self.session is not None and not self._starting
+
+    @property
+    def starting(self) -> bool:
+        return self._starting
 
     # ------------------------------------------------------------- session setup
 
     def ensure(self, done) -> None:
-        """done(error_or_None) once a session exists (asks the user on the PC the first time)."""
+        """done(error_or_None) once the session has started (asks the user on the PC the first time)."""
         if self.ready:
             done(None)
             return
@@ -75,6 +83,7 @@ class RemoteDesktop:
         if self._starting:
             return
         self._starting = True
+        self._attempt += 1
         token = secrets.token_hex(8)
         self._request(RD, "CreateSession", lambda h: GLib.Variant("(a{sv})", ({
             "handle_token": GLib.Variant("s", h), "session_handle_token": GLib.Variant("s", "pb" + token)},)),
@@ -82,6 +91,8 @@ class RemoteDesktop:
 
     def _finish(self, error: str | None) -> None:
         self._starting = False
+        if error:
+            self.close()  # a refused or half-made session must not look usable; the next request starts afresh
         waiters, self._waiters = self._waiters, []
         for w in waiters:
             w(error)
@@ -91,9 +102,12 @@ class RemoteDesktop:
         handle = "h" + secrets.token_hex(6)
         path = f"/org/freedesktop/portal/desktop/request/{self._sender}/{handle}"
         sub = 0
+        attempt = self._attempt
 
         def on_response(_conn, _sender, _path, _iface, _signal, params) -> None:
             self._bus.signal_unsubscribe(sub)
+            if attempt != self._attempt:
+                return
             code, results = params.unpack()
             if code != 0:
                 self._finish("Remote control was not allowed on the PC" if code == 1 else f"portal error {code}")
@@ -108,7 +122,8 @@ class RemoteDesktop:
                 bus.call_finish(res)
             except GLib.Error as exc:
                 self._bus.signal_unsubscribe(sub)
-                self._finish(f"portal call {method} failed: {exc.message}")
+                if attempt == self._attempt:
+                    self._finish(f"portal call {method} failed: {exc.message}")
 
         self._bus.call(PORTAL, PORTAL_PATH, iface, method, make_args(handle), None,
                        Gio.DBusCallFlags.NONE, -1, None, on_called)
@@ -144,9 +159,13 @@ class RemoteDesktop:
     def _on_started(self, results: dict) -> None:
         token = results.get("restore_token")
         if token:
-            TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-            TOKEN_PATH.write_text(token)
-            TOKEN_PATH.chmod(0o600)
+            try:
+                TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+                    os.fchmod(f.fileno(), 0o600)  # a file left by an older version may be more open
+                    f.write(token)
+            except OSError as exc:  # the dialog will simply be shown again next time
+                log.warning("could not save the remote desktop permission: %s", exc)
         self.streams = [{"node": node, "size": tuple(props.get("size", (0, 0))),
                          "kind": "window" if props.get("source_type") == 2 else "screen"}
                         for node, props in (results.get("streams") or [])]
@@ -159,8 +178,13 @@ class RemoteDesktop:
         log.info("remote desktop session closed")
         if self._closed_sub:
             self._bus.signal_unsubscribe(self._closed_sub)
+            self._closed_sub = 0
         self.session = None
         self.streams = []
+        self.devices = 0
+        self._attempt += 1
+        if self._starting:  # closed before it started: no further reply will come, so answer the waiters now
+            self._finish("Remote control was closed on the PC")
 
     def forget_choice(self) -> None:
         """Drop the remembered selection so the next session asks which windows to share."""

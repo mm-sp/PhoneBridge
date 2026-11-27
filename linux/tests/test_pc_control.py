@@ -94,6 +94,19 @@ async def main_async() -> int:
     check("an expired grant is refused on the very next message",
           denied.type == "pc.status" and denied.payload.get("denied") is True)
     check("pc_control_active() is False after the deadline", not phone.pc_control_active())
+
+    # A change that leaves the file's size and modification time as they were (two writes within one timestamp tick)
+    phone.pc_control_until = 4000000000.0
+    phone.save()
+    record = pairing.DEVICES_DIR / "cafe.json"
+    before = record.stat()
+    allowed_before = pc._pc_control_allowed("cafe")
+    record.write_bytes(record.read_bytes().replace(b"4000000000.0", b"1000000000.0"))
+    os.utime(record, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = record.stat()
+    check("a change is seen even when the file's size and time are unchanged",
+          allowed_before and (after.st_size, after.st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+          and not pc._pc_control_allowed("cafe"))
     phone.pc_control_until = time.time() + 3600
     phone.save()
 

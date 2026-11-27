@@ -37,7 +37,9 @@ class PcControl:
         self._stream_conn: DeviceConnection | None = None
         self._frame_in_flight = False
         self._needs_reask = False
-        self._gate_cache: dict[str, tuple[tuple[int, int], float | None]] = {}
+        self._screen_request = 0  # only the newest screen request may start a stream; "stop" cancels a pending one
+        self._portal_refused_at = float("-inf")
+        self._gate_cache: dict[str, tuple[bytes, float | None]] = {}
         # PC-side approval: an async callable (device) -> minutes granted (0 = refused). The GUI shows the prompt.
         # Without one (tests, headless) a phone's request simply stays refused.
         self.approval_callback = None
@@ -70,11 +72,12 @@ class PcControl:
     # ------------------------------------------------------------- helpers
 
     def _pc_control_allowed(self, fingerprint: str) -> bool:
-        """The per-phone switch, re-read only when the device file changed (one stat() per message instead of a
-        read + JSON parse + key unwrap), so turning it off takes effect on the very next message."""
+        """The per-phone switch, parsed again only when the device file's contents changed (one small read per message
+        instead of a read + JSON parse + key unwrap), so turning it off takes effect on the very next message.
+        The contents are compared, not the file's time and size: two writes within one filesystem timestamp tick can
+        leave both identical."""
         try:
-            st = (pairing.DEVICES_DIR / f"{fingerprint}.json").stat()
-            stamp = (st.st_mtime_ns, st.st_size)
+            stamp = (pairing.DEVICES_DIR / f"{fingerprint}.json").read_bytes()
         except OSError:
             self._gate_cache.pop(fingerprint, None)
             return False
@@ -187,7 +190,9 @@ class PcControl:
         asyncio.run_coroutine_threadsafe(conn.send("control", type_, payload), self._loop)
 
     def _on_connection_change(self, conn: DeviceConnection, connected: bool) -> None:
-        if not connected:
+        # A phone that reconnects before the PC noticed the old link was dead is only announced as "connected": the
+        # screen capture feeding the old link must end then too.
+        if not connected or (self._stream_conn is not None and self._stream_conn is not conn):
             GLib.idle_add(self._stop_screen)
 
     # ------------------------------------------------------------- terminal (unavailable)
@@ -273,20 +278,36 @@ class PcControl:
 
     # ------------------------------------------------------------- remote input / screen
 
-    def _with_remote(self, conn: DeviceConnection, then) -> None:
-        """Runs then(remote) on the GTK thread once the portal session is ready."""
+    INPUT_MAX_AGE = 5.0         # input that waited longer than this for the PC's dialog is dropped, never replayed
+    INPUT_REASK_COOLDOWN = 30   # after the dialog is refused, touch/typing alone cannot raise it again this soon
+
+    def _still_wanted(self, conn: DeviceConnection) -> bool:
+        """The PC's dialog can stay open for minutes: by the time it is answered the phone may have disconnected, or
+        PC control may have been revoked or have expired."""
+        return self._server.get_connection(conn.fingerprint) is conn and self._pc_control_allowed(conn.fingerprint)
+
+    def _with_remote(self, conn: DeviceConnection, then, from_input: bool = False) -> None:
+        """Runs then(remote) on the GTK thread once the portal session is ready, if the phone is still allowed then."""
         def go() -> bool:
             if self._remote is None:
                 self._remote = RemoteDesktop()
             remote = self._remote
-            if not remote.ready:
+            quiet = from_input and remote.starting  # a stream of touch events must not repeat every status message
+            if not remote.ready and not quiet:
                 self._send_from_gtk(conn, "pc.remote_status", {
                     "state": "waiting", "message": "On the laptop: turn ON \"Allow remote interaction\", then click "
                                "\"Share\" (first time only)"})
 
             def ready(error: str | None) -> None:
                 if error:
-                    self._send_from_gtk(conn, "pc.remote_status", {"state": "denied", "message": error})
+                    self._portal_refused_at = time.monotonic()
+                    if not quiet:
+                        self._send_from_gtk(conn, "pc.remote_status", {"state": "denied", "message": error})
+                    return
+                if not self._still_wanted(conn):
+                    return
+                if quiet:
+                    then(remote)
                     return
                 if remote.can_control:
                     self._send_from_gtk(conn, "pc.remote_status", {"state": "ready", "message": "Controlling the PC"})
@@ -310,8 +331,16 @@ class PcControl:
         kind = p.get("kind")
         if self._remote is not None and self._remote.ready:
             GLib.idle_add(self._apply_input, self._remote, kind, p)
-        else:
-            self._with_remote(conn, lambda r: self._apply_input(r, kind, p))
+            return
+        asked = time.monotonic()
+        if asked - self._portal_refused_at < self.INPUT_REASK_COOLDOWN:
+            return
+
+        def apply_if_fresh(remote) -> None:
+            if time.monotonic() - asked <= self.INPUT_MAX_AGE:
+                self._apply_input(remote, kind, p)
+
+        self._with_remote(conn, apply_if_fresh, from_input=True)
 
     @staticmethod
     def _apply_input(remote: RemoteDesktop, kind: str, p: dict) -> bool:
@@ -349,7 +378,14 @@ class PcControl:
                 self._needs_reask = False
                 self._stop_screen()
                 self._remote.forget_choice()  # ask again (with remote interaction this time)
-            self._with_remote(conn, lambda remote: self._show_stream(conn, remote, 0))
+            self._screen_request += 1
+            request = self._screen_request
+
+            def show(remote) -> None:
+                if request == self._screen_request:
+                    self._show_stream(conn, remote, 0)
+
+            self._with_remote(conn, show)
             return False
 
         GLib.idle_add(go)
@@ -364,6 +400,7 @@ class PcControl:
             self._stream_conn = conn
             self._streamer = ScreenStreamer(remote, self._on_frame)
         except Exception as exc:  # noqa: BLE001
+            self._stream_conn = None
             log.warning("screen stream failed: %s", exc)
             self._send_from_gtk(conn, "pc.remote_status", {"state": "denied", "message": f"Screen capture failed: {exc}"})
             return
@@ -373,7 +410,12 @@ class PcControl:
             "width": self._streamer.size[0], "height": self._streamer.size[1]})
 
     async def _on_screen_stop(self, _conn: DeviceConnection, _env) -> None:
-        GLib.idle_add(self._stop_screen)
+        GLib.idle_add(self._cancel_screen)
+
+    def _cancel_screen(self) -> bool:
+        """The phone asked to stop: end the stream, and don't start one that is still waiting for the PC's dialog."""
+        self._screen_request += 1
+        return self._stop_screen()
 
     def _stop_screen(self) -> bool:
         if self._streamer is not None:
