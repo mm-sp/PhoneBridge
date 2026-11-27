@@ -26,6 +26,7 @@ log = logging.getLogger("phonebridge.relay_client")
 CONFIG_PATH = Path.home() / ".config" / "phonebridge" / "relay.json"
 SLOTS_PER_DEVICE = 3
 DEVICE_REFRESH_SECONDS = 20
+RETRY_SECONDS = 5.0        # first wait before a failed parked connection is retried (doubles, up to a minute)
 DEFAULT_PORT = 28200
 
 
@@ -97,7 +98,7 @@ class RelayClient:
     async def _slot(self, room: str) -> None:
         """One parked connection: wait for a phone, serve it, finish."""
         state = {"idle": True}
-        backoff = 5.0
+        backoff = RETRY_SECONDS
         try:
             while True:
                 try:
@@ -107,6 +108,8 @@ class RelayClient:
                     raise
                 except (OSError, asyncio.IncompleteReadError, ConnectionError) as exc:
                     log.warning("relay slot failed: %r", exc)
+                if not state["idle"]:
+                    return   # a phone had taken this slot and its replacement is already parked: retrying would add one
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
         finally:
@@ -114,9 +117,6 @@ class RelayClient:
                 self._idle[room] = max(0, self._idle.get(room, 1) - 1)
 
     async def _park_and_serve(self, room: str, state: dict) -> None:
-        if not state["idle"]:                              # retrying after a failure that happened past GO
-            state["idle"] = True
-            self._idle[room] = self._idle.get(room, 0) + 1
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
         transport, protocol = await asyncio.wait_for(

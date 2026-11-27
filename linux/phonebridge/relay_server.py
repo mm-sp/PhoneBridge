@@ -27,6 +27,7 @@ MAX_SLOTS_PER_ROOM = 8
 MAX_ROOMS = 10_000
 FIRST_LINE_TIMEOUT = 10
 READY_TIMEOUT = 8
+REAP_SECONDS = 15.0   # how often a parked connection is checked for having been closed by the PC
 _LINE = re.compile(rb"^PBRELAY (pc|phone) ([0-9a-f]{32})$")
 
 
@@ -82,7 +83,10 @@ class RelayServer:
             slots.popleft().writer.close()
         slots.append(slot)
         try:
-            await slot.finished          # stays parked until a phone takes it or it dies
+            while not slot.finished.done():   # stays parked until a phone takes it or it dies
+                await asyncio.wait([slot.finished], timeout=REAP_SECONDS)
+                if slot in slots and not slot.alive():
+                    break   # the PC went away while parked: don't keep its slot (and room) until a phone happens to ask
         finally:
             if slot in slots:
                 slots.remove(slot)

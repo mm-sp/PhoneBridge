@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from phonebridge import crypto, pairing, relay_server, transport  # noqa: E402
+from phonebridge import crypto, pairing, relay_client, relay_server, transport  # noqa: E402
 from phonebridge.protocol import Envelope  # noqa: E402
 
 PASS = FAIL = 0
@@ -126,6 +126,73 @@ async def main_async() -> int:
     check("parked slots are withdrawn, the relay answers NOPC", line4 == b"NOPC")
     w4.close()
     check("server has no relay client any more", server.relay is None)
+
+    print("7. a connection that fails after a phone took the slot is not parked twice")
+    open_now: set = set()
+    accepted = 0
+
+    async def broken_relay(r, w):
+        nonlocal accepted
+        accepted += 1
+        first = accepted <= 4          # the first few "phones" send junk instead of a TLS hello
+        open_now.add(w)
+        try:
+            await r.readline()
+            if first:
+                w.write(b"GO\n")
+                await r.readline()     # READY
+                w.write(b"this is not TLS\r\n" * 4)
+                await w.drain()
+                w.close()
+            await r.read()
+        except ConnectionError:
+            pass
+        finally:
+            open_now.discard(w)
+            w.close()
+
+    fake = await asyncio.start_server(broken_relay, "127.0.0.1", 0)
+    relay_client.RETRY_SECONDS = 0.05
+    client = relay_client.RelayClient(server, "127.0.0.1", fake.sockets[0].getsockname()[1])
+    client.start()
+    await asyncio.sleep(2.0)
+    check("the failures happened", accepted >= 5)
+    check("exactly the configured number of connections stays parked",
+          len(open_now) == relay_client.SLOTS_PER_DEVICE and client._idle[room] == relay_client.SLOTS_PER_DEVICE)  # noqa: SLF001
+    client.stop()
+    await asyncio.sleep(0.3)
+    fake.close()
+
+    print("8. the relay forgets a parked connection the PC closed")
+    relay_server.REAP_SECONDS = 0.1
+    other = relay_server.RelayServer()
+    other_port = await other.start("127.0.0.1", 0)
+    gone_room, kept_room = "a" * 32, "b" * 32
+    parked = []
+    for name in (gone_room, kept_room):
+        r, w = await asyncio.open_connection("127.0.0.1", other_port)
+        w.write(f"PBRELAY pc {name}\n".encode())
+        await w.drain()
+        parked.append((r, w))
+    await asyncio.sleep(0.4)
+    check("both rooms are parked", set(other._rooms) == {gone_room, kept_room})  # noqa: SLF001
+    parked[0][1].close()
+    await asyncio.sleep(0.6)
+    check("the closed one is removed without any phone asking", set(other._rooms) == {kept_room})  # noqa: SLF001
+    _r5, w5, line5 = await phone_via_relay(other_port, gone_room, tls=False)
+    check("…and a phone asking for it is told there is no PC", line5 == b"NOPC")
+    w5.close()
+    phone5 = asyncio.ensure_future(phone_via_relay(other_port, kept_room, tls=False))
+    go = await asyncio.wait_for(parked[1][0].readline(), 5)
+    parked[1][1].write(b"READY\n")
+    _r6, w6, line6 = await phone5
+    await asyncio.sleep(0.4)                       # several reap periods while the connection is in use
+    w6.write(b"still-here")
+    check("a connection in use is left alone", go == b"GO\n" and line6 == b"OK"
+          and await asyncio.wait_for(parked[1][0].readexactly(10), 5) == b"still-here")
+    w6.close()
+    parked[1][1].close()
+    other.server.close()
 
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n{PASS} passed, {FAIL} failed")
