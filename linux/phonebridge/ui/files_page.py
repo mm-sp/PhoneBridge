@@ -19,6 +19,7 @@ from .loading import LoadingBar, LoadingMixin
 SAFE_AUTO_OPEN = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".txt", ".pdf", ".mp3", ".m4a", ".wav",
                             ".ogg", ".flac", ".mp4", ".mkv", ".mov", ".webm"})
 DOWNLOADS_DIR = Path.home() / "Downloads" / "PhoneBridge"
+REQUESTING = "Requesting from phone…"
 
 _ICON_BY_EXT = {
     **dict.fromkeys(("jpg", "jpeg", "png", "gif", "webp", "heic", "bmp"), "image-x-generic-symbolic"),
@@ -45,6 +46,7 @@ class FilesPage(Gtk.Box, LoadingMixin):
         self._open_when_saved: set[str] = set()
         self._transfer_rows: dict[str, tuple[Adw.ActionRow, Gtk.ProgressBar]] = {}
         self._cancel_buttons: dict[str, Gtk.Button] = {}
+        self._sent_rows: dict[str, str] = {}   # PC->phone transfer id -> row key
 
         self._stack = Adw.ViewStack(vexpand=True)
         self._stack.add_titled_with_icon(self._build_browser(), "phone", "Phone storage", "phone-symbolic")
@@ -113,9 +115,31 @@ class FilesPage(Gtk.Box, LoadingMixin):
         self._placeholder.set_label("Loading…")
         self._on_list(self._path)
 
+    def after_refusal(self, _what: str) -> None:
+        self._loaded = False
+        while (child := self._file_list.get_first_child()) is not None:
+            self._file_list.remove(child)   # the entries shown belong to another folder than the path above them
+        self._placeholder.set_label("Browsing the phone's files isn't allowed (see the note above)")
+
+    def download_refused(self, phone_path: str | None, message: str) -> None:
+        """files.get was refused. Older phone apps don't say which file: then every request still unanswered failed."""
+        if phone_path:
+            keys = [f"get:{phone_path}"]
+        else:
+            keys = [k for k, (row, _bar) in self._transfer_rows.items()
+                    if k.startswith("get:") and row.get_subtitle() == REQUESTING]
+        for key in keys:
+            self._open_when_saved.discard(key[len("get:"):])
+            self._update_transfer(key, f"Failed: {message}", None)
+
     def set_listing(self, payload: dict) -> None:
+        # Only the folder this page asked for: the mounted phone folder (phone_fs.py) receives listings too, and a late
+        # answer for a folder already left must not pull the view back.
+        path = payload.get("path") or "/"
+        if posixpath.normpath("/" + path.lstrip("/")) != posixpath.normpath("/" + self._path.lstrip("/")):
+            return
         self._loaded = True
-        self._path = payload.get("path") or "/"
+        self._path = path
         self._path_label.set_label(f"Phone{self._path if self._path != '/' else ''}")
         while (child := self._file_list.get_first_child()) is not None:
             self._file_list.remove(child)
@@ -154,7 +178,7 @@ class FilesPage(Gtk.Box, LoadingMixin):
         name = posixpath.basename(phone_path)
         if open_after:
             self._open_when_saved.add(phone_path)
-        self._transfer_row(f"get:{phone_path}", f"{name}", "Requesting from phone…", incoming=True)
+        self._transfer_row(f"get:{phone_path}", f"{name}", REQUESTING, incoming=True)
         self._on_get(phone_path)
 
     # ---------------------------------------------------------------- transfers
@@ -259,13 +283,26 @@ class FilesPage(Gtk.Box, LoadingMixin):
         return f"get:{src}" if src else f"in:{payload.get('transfer_id')}"
 
     def on_phone_saved(self, payload: dict) -> None:
-        """Phone confirmed a PC->phone transfer landed (file.saved)."""
-        for key, (row, bar) in self._transfer_rows.items():
-            if key.startswith("out:") and key.endswith(payload.get("filename", "\0")):
-                row.set_subtitle(f"Saved on phone: {payload.get('path', '')}")
-                bar.set_fraction(1.0)
+        """Phone confirmed a PC->phone transfer landed (file.saved). Matched by transfer id: the phone renames a file
+        whose name is taken ("name (1).ext"). Without a known id, by the exact file name."""
+        key = self._sent_rows.get(str(payload.get("transfer_id", "")))
+        keys = [key] if key else [k for k in self._transfer_rows
+                                  if k.startswith("out:") and k.split(":", 2)[2] == payload.get("filename")]
+        for key in keys:
+            self._update_transfer(key, f"Saved on phone: {payload.get('path', '')}", 1.0)
         if self._loaded:
             self.navigate(self._path)
+
+    def on_phone_failed(self, transfer_id: str, message: str) -> None:
+        """The phone couldn't store a file sent from here (it may have received all of it already)."""
+        key = self._sent_rows.get(transfer_id)
+        if key is not None:
+            self._update_transfer(key, f"Failed: {message}", None)
+
+    def _on_offered(self, key: str, fingerprint: str, transfer_id: str) -> None:
+        """A PC->phone transfer got its id."""
+        self._sent_rows[transfer_id] = key
+        self._bind_cancel(key, fingerprint, transfer_id)
 
     def _on_send_clicked(self, _button) -> None:
         dialog = Gtk.FileDialog(title="Send files to phone")
@@ -295,6 +332,13 @@ class FilesPage(Gtk.Box, LoadingMixin):
                 self._send_one(fingerprints[0], path, dest)
         self._stack.set_visible_child_name("transfers")
 
+    def _mark_sent(self, key: str) -> bool:
+        entry = self._transfer_rows.get(key)
+        # The phone's "saved" (or "failed") notice travels separately and may already have arrived.
+        if entry is not None and not (entry[0].get_subtitle() or "").startswith(("Saved", "Failed")):
+            self._update_transfer(key, "Sent — waiting for phone to save…", 1.0)
+        return False
+
     def _send_one(self, fingerprint: str, path: Path, dest: str) -> None:
         row_key = f"out:{time.time()}:{path.name}"
         self._transfer_row(row_key, path.name, f"Sending to phone {dest}…", incoming=False)
@@ -311,8 +355,8 @@ class FilesPage(Gtk.Box, LoadingMixin):
             try:
                 await file_transfer.send_file(
                     conn, path, on_progress=on_progress, extra_offer_fields={"dest_path": dest},
-                    on_offer=lambda tid: GLib.idle_add(self._bind_cancel, row_key, fingerprint, tid))
-                GLib.idle_add(self._update_transfer, row_key, "Sent — waiting for phone to save…", 1.0)
+                    on_offer=lambda tid: GLib.idle_add(self._on_offered, row_key, fingerprint, tid))
+                GLib.idle_add(self._mark_sent, row_key)
             except Exception as exc:  # noqa: BLE001
                 GLib.idle_add(self._update_transfer, row_key, f"Failed: {exc}", None)
 

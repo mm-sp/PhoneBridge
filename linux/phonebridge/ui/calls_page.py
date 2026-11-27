@@ -46,6 +46,9 @@ class CallsPage(Gtk.Box, LoadingMixin):
         self._contacts: list[dict] = []
         self._loaded = False
         self._call_started: float | None = None
+        self._dialing = False      # the banner shows a call asked for here that the phone hasn't reported yet
+        self._link_lost = False    # the banner only remains for the PC-audio switch
+        self._pc_audio_phone = ""
         self._n_calls = 0
         self._n_missed = 0
         self._loading_bars = {
@@ -206,6 +209,16 @@ class CallsPage(Gtk.Box, LoadingMixin):
     def mark_requested(self) -> None:
         self._loaded = True
 
+    def after_refusal(self, what: str) -> None:
+        if what == "contacts":
+            self._more_contacts_btn.set_sensitive(True)
+            if not self._contacts:
+                self._loaded = False   # ask again the next time the tab is opened
+        else:
+            self._more_calls_btn.set_sensitive(True)
+            if not self._n_calls:
+                self._loaded = False
+
     def set_history(self, payload: dict) -> None:
         """A page of the call log: offset 0 replaces, later pages append."""
         self._loaded = True
@@ -284,8 +297,8 @@ class CallsPage(Gtk.Box, LoadingMixin):
 
     def _dial(self, number: str) -> None:
         number = number.strip()
-        if number:
-            self._on_dial(number)
+        if number and self._on_dial(number) is not False:   # False: no phone connected, nothing is being called
+            self._dialing = True
             self._call_box.set_visible(True)
             self._call_title.set_label(f"Calling {self._name_for(number) or number}…")
             self._call_sub.set_label("Talk on your phone (or its headset)")
@@ -301,7 +314,30 @@ class CallsPage(Gtk.Box, LoadingMixin):
 
     # ---------------------------------------------------------------- live call
 
+    def dial_refused(self) -> None:
+        """The phone didn't place the call asked for here: take the "Calling…" banner away (never a real call's)."""
+        if self._dialing and self._call_started is None:
+            self._call_box.set_visible(False)
+        self._dialing = False
+
+    def on_disconnected(self) -> None:
+        """Without the link nothing more is heard about a call and its buttons do nothing. Call audio that goes through
+        this PC (Bluetooth) may well be running still: it is left alone, with its switch."""
+        self._dialing = False
+        if not self._pc_audio:
+            self.on_state({"state": "ended"})
+            return
+        self._call_started = None
+        self._reset_toggles()
+        self._call_box.set_visible(True)
+        self._call_title.set_label("Call audio is still routed to this PC")   # (stays true after a reconnect)
+        self._call_sub.set_label("The call controls were lost with the phone's connection")
+        self._set_buttons(ringing=False, active=False)
+        self._pc_audio_btn.set_visible(True)
+        self._link_lost = True
+
     def on_ringing(self, caller_name: str, number: str) -> None:
+        self._dialing = self._link_lost = False
         self._call_box.set_visible(True)
         who = caller_name or self._name_for(number) or number or "Unknown caller"
         self._call_title.set_label(f"Incoming call: {who}")
@@ -312,6 +348,7 @@ class CallsPage(Gtk.Box, LoadingMixin):
     def on_state(self, payload: dict) -> None:
         state = payload.get("state", "")
         number = payload.get("number", "")
+        self._dialing = self._link_lost = False
         if state == "active":
             who = payload.get("caller_name") or self._name_for(number) or number or "Call"
             self._call_box.set_visible(True)
@@ -323,10 +360,13 @@ class CallsPage(Gtk.Box, LoadingMixin):
             self._call_started = None
             if self._pc_audio:
                 self._pc_audio_btn.set_active(False)  # restores the phone's normal Bluetooth profile
-            self._muted = False
-            self._speaker = False
-            self._mute_btn.set_label("Mute")
-            self._speaker_btn.set_label("Speaker")
+            self._reset_toggles()
+
+    def _reset_toggles(self) -> None:
+        self._muted = False
+        self._speaker = False
+        self._mute_btn.set_label("Mute")
+        self._speaker_btn.set_label("Speaker")
 
     def _phone_name(self) -> str:
         root = self.get_root()
@@ -340,10 +380,17 @@ class CallsPage(Gtk.Box, LoadingMixin):
 
         from .. import call_audio
 
-        want, name = button.get_active(), self._phone_name()
+        want = button.get_active()
+        # Switching back uses the name from switching on: by then the phone may be disconnected from PhoneBridge.
+        name = self._phone_name() if want else self._pc_audio_phone
         if want == self._pc_audio or not name:
             return
         self._pc_audio = want
+        if want:
+            self._pc_audio_phone = name
+        elif self._link_lost:
+            self._link_lost = False
+            self._call_box.set_visible(False)
 
         def work() -> None:
             if want:

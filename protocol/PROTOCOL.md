@@ -219,8 +219,13 @@ info="phonebridge-v4|rekey|<generation>")`. The exporter is unchanged for the se
   the shared folder only after the SHA-256 check) and partials older than 7 days are purged.
 * **USB.** `adb reverse tcp:<port> tcp:<port>` makes the phone's `127.0.0.1:<port>` reach the PC's control port over the cable
   only. The phone tries it first; data connections follow the control connection's route; UDP video is not used over USB.
+* **Unsolicited `pong`.** While an "Ask" prompt holds up the PC's reading, it sends `pong` every 20 s so the phone does not
+  take the silent link for dead; receivers ignore a `pong` they did not ask for.
 * **Permission denials.** `permission.denied {feature, type}` is the reply to a request the other side's permission manager
-  refused.
+  refused (or, for a request that cannot wait, is still asking its user about). The phone also repeats the request's
+  `transfer_id`, `request_id` or `path` when it had one, so the PC can tell which request failed; it never repeats
+  content such as numbers, texts or file names of an offer. The PC repeats the `transfer_id` of a refused offer. A refused
+  `file.offer` gets no `file.reject`, so the sender ends that transfer on the denial.
 
 ## 1j. Pairing v4: SPAKE2 PIN verification and the USB route
 
@@ -357,12 +362,12 @@ with `ch` set to `file`/`video` and `payload` holding raw bytes directly
 | `files.list_result` | phone→pc | `{path, entries:[{name, is_dir, size, mtime}], free, total, error?}` |
 | `files.get` | pc→phone | `{path}` — answered with `file.offer` (+chunks) carrying `source_path` |
 | `file.offer` (extended) | pc→phone | optional `dest_path` (phone folder to save into, default `Download/PhoneBridge`) |
-| `file.saved` | phone→pc | `{transfer_id, filename, path}` once a PC→phone file is written |
+| `file.saved` | phone→pc | `{transfer_id, filename, path}` once a PC→phone file is written (`filename` may differ from the offered one if that name was taken). If writing it fails, the phone sends `error {message, transfer_id}` instead |
 | `webcam.start` (extended) | pc→phone | `{facing: front\|back}` |
 | `webcam.switch` | pc→phone | `{facing}` — restarts the stream on the other camera |
 | `video.started` | phone→pc | `{kind: mirror\|webcam, width, height, rotation, facing?, input_available?}` |
 | `video.stopped` | phone→pc | `{kind}` |
-| `mirror.status` / `webcam.status` | phone→pc | `{state, message}` — consent pending/denied, missing permission, camera errors |
+| `mirror.status` / `webcam.status` | phone→pc | `{state, message}` — consent pending/denied, missing permission, camera errors. `webcam.status` with `error` or `stopped` means no camera stream is running (any more): the PC ends its view |
 | `mirror.input` (extended) | pc→phone | adds `kind: long_press {x,y}` and keys `notifications, quick_settings, power, lock, screenshot, backspace, enter` |
 | `apps.list` (extended) | phone→pc | apps add `system` |
 

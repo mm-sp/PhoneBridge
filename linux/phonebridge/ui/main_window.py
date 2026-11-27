@@ -7,6 +7,7 @@ methods here, which send to the connected phone.
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 
 import gi
@@ -17,6 +18,7 @@ from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
 
 from .. import pairing
 from ..screensync import glue as sync_glue, settings as sync_settings
+from ..security import permissions
 from .apps_page import AppsPage
 from .calls_page import CallsPage
 from .clipboard_page import ClipboardBridge, ClipboardPage
@@ -46,6 +48,18 @@ SECTIONS = [
 ]
 
 
+# The phone's own names for its permissions (PcAccess.FEATURES in the Android app), so the user can find the switch.
+PHONE_PERMISSIONS = {
+    "files": "Files", "photos": "Photos and videos", "notifications": "Notifications", "sms": "Messages (read)",
+    "sms_send": "Sending messages", "calls": "Calls and contacts", "call_dial": "Placing calls",
+    "clipboard": "Clipboard sync", "screen": "Screen mirroring and camera",
+    "remote_control": "Remote control of this phone", "apps": "Apps",
+}
+# Refused requests the PC makes on its own: nothing to tell the user.
+_BACKGROUND_REQUESTS = {"screen.state_request"}
+# One reminder per permission in this time: clipboard updates and touch input are sent far more often.
+DENIAL_TOAST_SECONDS = 30
+
 # Page sizes: tabs load this many first, then "Load more" fetches the next page.
 SMS_PAGE = 20
 CALLS_PAGE = 20
@@ -71,6 +85,11 @@ _LOAD_RESPONSES = {
     "photos.list_result": "photos",
     "apps.list": "apps",
 }
+# Request -> the message (type, telling payload fields) the phone answers with, as this PC's permissions judge it.
+_ANSWER_TO = {request: (answer, {}) for request, (_page, what) in _LOAD_REQUESTS.items()
+              for answer, answered in _LOAD_RESPONSES.items() if answered == what}
+_ANSWER_TO |= {"notifications.sync": ("notifications.all", {}), "files.get": ("file.offer", {}),
+               "photos.get": ("file.offer", {"photo_id": "any"})}
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -84,6 +103,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._active_fp: str | None = None  # phone the tabs show/control
         self._updating_dropdown = False
         self._current_key = "device"
+        self._denial_toasted: dict[str, float] = {}  # phone permission -> when its refusal was last shown
 
         self._device_page = DevicePage(on_pair=self._open_pairing, on_forget=self._forget_device,
                                        on_control=self._set_active_phone,
@@ -229,7 +249,11 @@ class MainWindow(Adw.ApplicationWindow):
     def _refresh_control_banner(self) -> bool:
         import time
 
-        active = [d for d in pairing.PairedDevice.list_all() if d.pc_control_active()]
+        devices = pairing.PairedDevice.list_all()
+        page = getattr(self, "_device_page", None)
+        if page is not None:
+            page.sync_pc_control(devices)   # the cards' checkboxes follow the same stored state as the banner
+        active = [d for d in devices if d.pc_control_active()]
         if active:
             left = max(1, int((max(d.pc_control_until for d in active) - time.time()) // 60) + 1)
             names = ", ".join(f"“{d.name}”" for d in active)
@@ -238,8 +262,6 @@ class MainWindow(Adw.ApplicationWindow):
         return True
 
     def _revoke_pc_control(self) -> None:
-        from ..security import permissions
-
         for d in pairing.PairedDevice.list_all():
             if d.allow_pc_control:
                 permissions.set_mode(d, "remote_control", permissions.DENY)
@@ -384,11 +406,35 @@ class MainWindow(Adw.ApplicationWindow):
         if fingerprint is None:
             self.toast("Phone not connected")
             return False
+        blocked = self._blocked_here(fingerprint, type_)
+        if blocked:
+            # Don't make the phone read (and maybe prompt for) data this PC would throw away on arrival.
+            message = f"“{blocked}” is turned off for this phone on this PC (Security tab)."
+            if type_ in _LOAD_REQUESTS:
+                page_key, what = _LOAD_REQUESTS[type_]
+                self._pages[page_key].loading_refused(what, message)
+            elif type_ == "files.get":
+                self._files_page.download_refused(payload.get("path"), message)
+            elif type_ == "photos.get":
+                self._photos_page.download_refused(message)
+            return False
         self._net_thread.run_coro(self._server.send(fingerprint, "control", type_, payload))
         if type_ in _LOAD_REQUESTS:
             page_key, what = _LOAD_REQUESTS[type_]
             self._pages[page_key].loading_started(what)
         return True
+
+    @staticmethod
+    def _blocked_here(fingerprint: str, type_: str) -> str | None:
+        """This PC's name for the permission that is set to Deny and would drop the answer to request `type_`, if any."""
+        answer = _ANSWER_TO.get(type_)
+        if answer is None:
+            return None
+        feature = permissions.feature_for(answer[0], answer[1])
+        device = pairing.PairedDevice.load(fingerprint)
+        if device is None or feature is None or permissions.mode_of(device, feature) != permissions.DENY:
+            return None
+        return permissions.FEATURES[feature]
 
     def _msg_load_progress(self, payload: dict) -> None:
         what = payload.get("what", "")
@@ -413,6 +459,9 @@ class MainWindow(Adw.ApplicationWindow):
         elif fingerprint == self._active_fp:
             self._mirror_page.on_disconnected()
             self._webcam_page.on_disconnected()
+            self._calls_page.on_disconnected()
+            self._app.withdraw_notification("call")
+            self._denial_toasted.clear()
             self._notifications_page.clear()
             others = list(self._connected)
             if others:
@@ -457,12 +506,13 @@ class MainWindow(Adw.ApplicationWindow):
         # Cheap things load straight away; heavy pages load when opened.
         if not self._is_ios(fingerprint):
             self._send("notifications.sync", {})
+            self._messages_page.mark_requested()  # so opening the tab doesn't ask again
+            self._calls_page.mark_requested()     # (before sending: a request refused at once undoes it)
             self._send("sms.list_threads", {"offset": 0, "limit": SMS_PAGE})
             self._send("calls.history_request", {"offset": 0, "limit": CALLS_PAGE})
             self._send("contacts.list_request", {"offset": 0, "limit": CONTACTS_PAGE})
-            self._messages_page.mark_requested()  # so opening the tab doesn't ask again
-            self._calls_page.mark_requested()
-            self._send("screen.state_request", {})
+            # No screen.state_request here: the phone reports its screen by itself on connect, and asking needs its
+            # "Remote control" permission, which would prompt the phone's user on every connection.
         page = self._pages[self._current_key]
         if hasattr(page, "on_shown"):
             page.on_shown()
@@ -687,12 +737,55 @@ class MainWindow(Adw.ApplicationWindow):
             self.toast(payload.get("message", ""))
 
     def _msg_webcam_status(self, payload: dict) -> None:
+        ended = payload.get("state") in ("error", "stopped")
+        if ended:   # the phone's camera is not streaming (any more): don't keep waiting on a frozen or empty picture
+            self._webcam_page.stop_if_running()
         self._webcam_page.set_status(payload.get("message", ""))
-        if payload.get("state") == "error":
+        if ended:
             self.toast(payload.get("message", ""))
 
     def _msg_error(self, payload: dict) -> None:
-        self.toast(payload.get("message", "Phone reported an error"))
+        message = payload.get("message", "Phone reported an error")
+        if payload.get("transfer_id"):
+            self._files_page.on_phone_failed(str(payload["transfer_id"]), message)
+        self.toast(message)
+
+    def _msg_permission_denied(self, payload: dict) -> None:
+        """The phone's permission manager refused a request, or is still asking its user. Whatever was waiting for the
+        answer must stop waiting, and the user needs to know where the switch is. (file.offer: file_transfer.py.)"""
+        type_ = str(payload.get("type", ""))
+        feature = str(payload.get("feature", ""))
+        if type_ in _BACKGROUND_REQUESTS or type_ == "file.offer":
+            return
+        name = PHONE_PERMISSIONS.get(feature, feature)
+        message = f"The phone didn't allow “{name}”. Approve it there, or change it in PhoneBridge › Security."
+        if type_ in _LOAD_REQUESTS:
+            page_key, what = _LOAD_REQUESTS[type_]
+            self._pages[page_key].loading_refused(what, message)
+        elif type_ in ("sms.send", "sms.send_mms"):
+            self._messages_page.send_refused(type_ == "sms.send_mms", payload.get("request_id"),
+                                             f"“{name}” isn't allowed on the phone")
+            self.toast(f"Not sent. {message}")
+        elif type_ == "call.dial":
+            self._calls_page.dial_refused()
+            self.toast(f"Not called. {message}")
+        elif type_ == "mirror.start":
+            self._msg_mirror_status({"state": "denied", "message": message})
+        elif type_ in ("webcam.start", "webcam.switch"):
+            if type_ == "webcam.start":
+                self._webcam_page.stop_if_running()
+            self._webcam_page.set_status(message)
+            self.toast(message)
+        else:
+            if type_ == "files.get":
+                self._files_page.download_refused(payload.get("path"), message)
+            elif type_ == "photos.get":
+                self._photos_page.download_refused(message)
+            elif type_ == "mirror.input":
+                self._mirror_page.set_status(message)
+            if time.monotonic() - self._denial_toasted.get(feature, float("-inf")) >= DENIAL_TOAST_SECONDS:
+                self._denial_toasted[feature] = time.monotonic()
+                self.toast(message)
 
     # file transfers phone -> PC (called by app.py)
 
@@ -769,7 +862,7 @@ class MainWindow(Adw.ApplicationWindow):
         if fingerprint is not None:
             self._server.set_video_sink(fingerprint, None)
             self._send("mirror.stop", {})
-        self._sync.stop_mirroring("user", stop_local=False)   # restores the phone display, ends the sync session
+        self._sync.viewer_stopped()   # restores the phone display, ends the sync session
 
     def _on_mirror_frame(self, data: bytes) -> None:
         """Net thread: every access unit counts as a received frame for the sync controller, then goes to the decoder."""
@@ -826,7 +919,17 @@ class MainWindow(Adw.ApplicationWindow):
         self._clip_bridge.set_text(text)
         self.toast("Copied")
 
+    @staticmethod
+    def _clipboard_off(fingerprint: str) -> bool:
+        """"Clipboard sync" set to Deny for this phone stops both directions, as the phone's own setting does."""
+        device = pairing.PairedDevice.load(fingerprint)
+        return device is not None and permissions.mode_of(device, "clipboard") == permissions.DENY
+
     def _send_clipboard_to_phone(self, text: str) -> None:
+        fp = self._fingerprint()
+        if fp is not None and self._clipboard_off(fp):
+            self.toast("“Clipboard sync” is turned off for this phone on this PC (Security tab)")
+            return
         if self._send("clipboard.update", {"text": text}):
             self.toast("Sent to phone clipboard")
 
@@ -838,7 +941,7 @@ class MainWindow(Adw.ApplicationWindow):
             return  # our own write coming back
         self._last_clip_image = b64
         fp = self._fingerprint()
-        if fp and self._clipboard_page.sync_switch.get_active():
+        if fp and self._clipboard_page.sync_switch.get_active() and not self._clipboard_off(fp):
             self._net_thread.run_coro(
                 self._server.send(fp, "control", "clipboard.update", {"image": b64, "mime": "image/png"})
             )
@@ -849,10 +952,9 @@ class MainWindow(Adw.ApplicationWindow):
         self._last_clip_text = text
         self._clipboard_page.add(text, "pc")
         self._mirror_page.set_clipboard(text, "pc")
-        if self._clipboard_page.sync_switch.get_active() and self._fingerprint():
-            self._net_thread.run_coro(
-                self._server.send(self._fingerprint(), "control", "clipboard.update", {"text": text})
-            )
+        fp = self._fingerprint()
+        if fp and self._clipboard_page.sync_switch.get_active() and not self._clipboard_off(fp):
+            self._net_thread.run_coro(self._server.send(fp, "control", "clipboard.update", {"text": text}))
 
     # ---------------------------------------------------------------- desktop notifications
 

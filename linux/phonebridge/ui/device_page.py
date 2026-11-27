@@ -45,9 +45,27 @@ def _wifi_icon(pct: int | None) -> str:
 
 
 class _DeviceCard:
+    _syncing = False
+
+    def sync_pc_control(self, stored: pairing.PairedDevice) -> None:
+        """Shows the stored state, which also changes elsewhere (the banner's "Revoke now", the Security page, a phone's
+        request approved in a dialog). Showing it records nothing."""
+        self.device.allow_pc_control, self.device.pc_control_until = stored.allow_pc_control, stored.pc_control_until
+        active = self.device.pc_control_active()
+        # A grant that has merely run out is left to _update_pc_control_label, which records the switch-off.
+        if self._pc_control.get_active() != active and (active or not stored.allow_pc_control):
+            self._syncing = True
+            try:
+                self._pc_control.set_active(active)
+            finally:
+                self._syncing = False
+        self._update_pc_control_label()
+
     def _on_pc_control_toggled(self, button: Gtk.CheckButton) -> None:
         from ..security import permissions
 
+        if self._syncing:
+            return
         fresh = pairing.PairedDevice.load(self.device.fingerprint) or self.device
         permissions.set_mode(fresh, "remote_control", permissions.ALLOW if button.get_active() else permissions.DENY)
         self.device.allow_pc_control, self.device.pc_control_until = fresh.allow_pc_control, fresh.pc_control_until
@@ -343,6 +361,12 @@ class DevicePage(Gtk.ScrolledWindow):
         # newest first, above the Pair button
         self._box.insert_child_after(card.widget, self._empty)
         self._empty.set_visible(False)
+
+    def sync_pc_control(self, devices: list[pairing.PairedDevice]) -> None:
+        for device in devices:
+            card = self._cards.get(device.fingerprint)
+            if card is not None:
+                card.sync_pc_control(device)
 
     def set_hotspot_text(self, fingerprint: str, text: str) -> None:
         card = self._cards.get(fingerprint)

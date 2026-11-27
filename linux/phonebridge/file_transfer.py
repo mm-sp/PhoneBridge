@@ -116,6 +116,9 @@ async def cancel_transfer(conn, tid: str, notify: bool = True) -> bool:
             inb.done.set_exception(TransferError("cancelled"))
     if out is not None and not out.done.done():
         out.done.set_exception(TransferError("cancelled"))
+        if not out.started.done():   # not accepted yet: send_file is waiting on this and must end now, not at the timeout
+            out.done.exception()     # nobody will await `done`, so mark its error as seen
+            out.started.set_exception(TransferError("cancelled"))
     if not out and not inb:
         return False
     if notify:
@@ -356,6 +359,22 @@ def on_reject(_conn, envelope) -> None:
         out.started.set_exception(TransferError(str(envelope.payload.get("reason") or "the phone rejected the file")))
 
 
+def on_denied(conn, envelope) -> None:
+    """The phone's permission manager refused a request (permission.denied); a refused file.offer gets no file.reject.
+    Older phone apps don't say which offer: then it is only ended if it is the single one waiting."""
+    p = envelope.payload
+    if p.get("type") != "file.offer":
+        return
+    waiting = {tid: out for tid, out in _OUT.items() if out.device_fp == conn.fingerprint and not out.started.done()}
+    tid = str(p.get("transfer_id", ""))
+    if not tid and len(waiting) == 1:
+        tid = next(iter(waiting))
+    out = waiting.get(tid)
+    if out is not None:
+        out.started.set_exception(TransferError(
+            "the phone didn't allow it: check the “Files” permission in PhoneBridge on the phone"))
+
+
 # Files the phone-side file-manager mount asked for (files.get -> source_path): they are saved in the
 # mount's cache instead of Downloads, and the waiting reader is released when they arrive.
 _FETCHES: dict[str, tuple[Path, "asyncio.Future"]] = {}
@@ -379,7 +398,7 @@ def _fail_fetch(payload: dict, reason: str) -> None:
 
 
 def register(server, dest_dir_for, on_progress_for=None, on_done=None) -> None:
-    """Wires file.offer / file.reject into a ControlChannelServer.
+    """Wires file.offer / file.reject / file.cancel / permission.denied into a ControlChannelServer.
     dest_dir_for(payload) -> Path; on_progress_for(payload) -> callable|None; on_done(path, size, payload)."""
 
     def done(path, size, payload) -> None:
@@ -405,6 +424,10 @@ def register(server, dest_dir_for, on_progress_for=None, on_done=None) -> None:
     async def cancel(conn, envelope) -> None:
         await cancel_transfer(conn, str(envelope.payload.get("transfer_id", "")), notify=False)
 
+    async def denied(conn, envelope) -> None:
+        on_denied(conn, envelope)
+
     server.on("file.cancel", cancel)
     server.on("file.offer", offer)
     server.on("file.reject", reject)
+    server.on("permission.denied", denied)

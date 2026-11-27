@@ -73,6 +73,9 @@ class AppsPage(Gtk.Box, LoadingMixin):
     def _request(self) -> None:
         self._on_request_list()
 
+    def after_refusal(self, _what: str) -> None:
+        self._loaded = False   # ask again the next time the tab is opened
+
     def set_apps(self, apps: list[dict]) -> None:
         self._loaded = True
         while (child := self._flow.get_first_child()) is not None:

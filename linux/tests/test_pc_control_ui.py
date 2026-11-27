@@ -21,7 +21,7 @@ from gi.repository import Adw  # noqa: E402
 
 from phonebridge import pairing  # noqa: E402
 from phonebridge.security import permissions as P  # noqa: E402
-from phonebridge.ui.device_page import _DeviceCard  # noqa: E402
+from phonebridge.ui.device_page import DevicePage, _DeviceCard  # noqa: E402
 from phonebridge.ui.main_window import MainWindow  # noqa: E402
 
 PASS = FAIL = 0
@@ -68,6 +68,35 @@ check("allowed again: banner shown", banner.get_revealed())
 revoke_self = SimpleNamespace(_control_banner=banner, toast=lambda m: None, _refresh_control_banner=refresh)
 MainWindow._revoke_pc_control(revoke_self)
 check("Revoke now: control off immediately and banner hidden", not pairing.PairedDevice.load(dev.fingerprint).pc_control_active() and not banner.get_revealed())
+
+# The card follows changes made elsewhere (a request approved in a dialog, "Revoke now", the Security page, expiry).
+page = DevicePage(on_pair=lambda: None, on_forget=lambda d: None, on_control=lambda fp: None, on_disconnect=lambda fp: None)
+card = page._cards[dev.fingerprint]
+window = SimpleNamespace(_control_banner=banner, _device_page=page)
+changes: list[str] = []
+P.on_change.append(lambda _d, _f, mode: changes.append(mode))
+P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "remote_control", P.ALLOW)
+MainWindow._refresh_control_banner(window)
+check("approved elsewhere: the card's box is ticked, with the time left",
+      card._pc_control.get_active() and "min left" in card._pc_control.get_label())
+check("…and showing it records no further change or new deadline", changes == [P.ALLOW])
+until = pairing.PairedDevice.load(dev.fingerprint).pc_control_until
+MainWindow._refresh_control_banner(window)
+check("…however often it is refreshed", pairing.PairedDevice.load(dev.fingerprint).pc_control_until == until)
+changes.clear()
+P.set_mode(pairing.PairedDevice.load(dev.fingerprint), "remote_control", P.DENY)   # what "Revoke now" does
+MainWindow._refresh_control_banner(window)
+check("revoked elsewhere: the box is unticked", not card._pc_control.get_active() and changes == [P.DENY]
+      and card._pc_control.get_label() == "Allow PC control")
+changes.clear()
+card._pc_control.set_active(True)
+check("the box still switches control on when the person ticks it",
+      changes == [P.ALLOW] and pairing.PairedDevice.load(dev.fingerprint).pc_control_active())
+pairing.PairedDevice.update(dev.fingerprint, pc_control_until=time.time() - 1)
+changes.clear()
+MainWindow._refresh_control_banner(window)
+check("run out: unticked, switched off on disk and recorded once", not card._pc_control.get_active()
+      and not pairing.PairedDevice.load(dev.fingerprint).allow_pc_control and changes == [P.DENY])
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

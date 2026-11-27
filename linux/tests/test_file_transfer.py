@@ -200,6 +200,33 @@ async def main_async() -> int:
         rejected = "no space" in str(exc)
     check("send_file raises TransferError carrying the reason", rejected)
 
+    print("5b. the phone's permission manager refuses an offer (permission.denied, no file.reject)")
+
+    async def outcome(task, wait=5.0):
+        try:
+            await asyncio.wait_for(asyncio.shield(task), wait)
+            return "sent"
+        except file_transfer.TransferError as exc:
+            return str(exc)
+        except asyncio.TimeoutError:
+            return "waiting"
+
+    async def offer_one():
+        task = asyncio.ensure_future(file_transfer.send_file(conn, src))
+        return task, (await asyncio.wait_for(phone.recv(), 5)).payload["transfer_id"]
+
+    first, tid_1 = await offer_one()
+    second, tid_2 = await offer_one()
+    await phone.send("permission.denied", {"feature": "sms", "type": "sms.list_threads"})
+    await phone.send("permission.denied", {"feature": "files", "type": "file.offer"})
+    check("a refusal that names no offer ends none of two", await outcome(first, 0.5) == "waiting" and not second.done())
+    await phone.send("permission.denied", {"feature": "files", "type": "file.offer", "transfer_id": tid_2})
+    check("the named offer ends at once, saying which permission", "Files" in await outcome(second))
+    check("…and only that one", not first.done())
+    await phone.send("permission.denied", {"feature": "files", "type": "file.offer"})
+    check("without an id the single waiting offer ends", "didn't allow" in await outcome(first))
+    check("refused offers are forgotten", tid_1 not in file_transfer._OUT and tid_2 not in file_transfer._OUT)  # noqa: SLF001
+
     print("6. phone -> PC upload with accept, resume offset and hash check")
     up = os.urandom(int(CHUNK * 1.5))
     tid = "t" * 32
@@ -254,6 +281,23 @@ async def main_async() -> int:
     check("the transfer is forgotten", tid_c not in file_transfer._OUT)  # noqa: SLF001
     check("cancelling an unknown transfer is a no-op", not await file_transfer.cancel_transfer(conn, "nope"))
     wc.close()
+
+    sendp = asyncio.ensure_future(file_transfer.send_file(conn, big2))
+    tid_p = (await phone.recv()).payload["transfer_id"]       # offered, but the phone has not accepted it yet
+    check("a transfer can be cancelled before the phone accepts it", await file_transfer.cancel_transfer(conn, tid_p))
+    try:
+        await asyncio.wait_for(sendp, 5)
+        reason = "no error"
+    except file_transfer.TransferError as exc:
+        reason = str(exc)
+    except asyncio.TimeoutError:
+        reason = "still waiting for the phone"
+    check("…and send_file ends at once with 'cancelled'", reason == "cancelled")
+    note = await asyncio.wait_for(phone.recv(), 5)
+    check("…the phone is told", note.type == "file.cancel" and note.payload["transfer_id"] == tid_p)
+    rp, wp = await phone.data_connection(tid_p, 0)
+    check("…a data connection arriving afterwards is given nothing", await asyncio.wait_for(rp.read(), 5) == b"")
+    wp.close()
 
     print("7c. cancelling a phone -> PC upload deletes the partial; partials are private")
     tid_u = "v" * 32

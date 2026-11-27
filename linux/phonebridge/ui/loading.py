@@ -58,6 +58,15 @@ class LoadingBar(Gtk.Revealer):
         self._cancel_timeout()
         GLib.timeout_add(250, lambda: (self.set_reveal_child(False), False)[1])
 
+    def refused(self, message: str) -> None:
+        """The phone answered, but with "no": say that instead of waiting for data that won't come."""
+        self._cancel_timeout()
+        self._bar.set_fraction(0.0)
+        self._label.set_label(message)
+        self._label.set_wrap(True)
+        self._label.add_css_class("error")
+        self.set_reveal_child(True)
+
     def _arm_timeout(self) -> None:
         self._cancel_timeout()
         self._timeout_id = GLib.timeout_add_seconds(NO_ANSWER_SECONDS, self._on_timeout)
@@ -93,3 +102,12 @@ class LoadingMixin:
         bar = self._loading_bars.get(what)
         if bar is not None:
             bar.done()
+
+    def loading_refused(self, what: str, message: str) -> None:
+        bar = self._loading_bars.get(what)
+        if bar is not None:
+            bar.refused(message)
+        self.after_refusal(what)
+
+    def after_refusal(self, what: str) -> None:
+        """Pages undo whatever "a request is on its way" state they hold."""

@@ -139,6 +139,27 @@ class MessagesPage(Gtk.Box, LoadingMixin):
     def mark_requested(self) -> None:
         self._loaded = True
 
+    def after_refusal(self, what: str) -> None:
+        if what == "sms.threads":
+            self._loaded = bool(self._rows)   # nothing to show: ask again the next time the tab is opened
+            self._more_threads_btn.set_sensitive(True)
+        elif self._thread_msgs:
+            self._render_thread()   # brings the "Load older messages" button back
+
+    def send_refused(self, mms: bool, request_id: str | None, reason: str) -> None:
+        """The phone didn't send a message typed here: its bubble must not stay "sending…"."""
+        if mms:
+            pending = [m for _addr, m in self._local_mms if m.get("status") == "sending"
+                       and (not request_id or m.get("request_id") == request_id)]
+        else:   # bubbles added here have no id, unlike messages listed by the phone
+            pending = [m for m in self._thread_msgs
+                       if m.get("status") == "sending" and not m.get("mms") and not m.get("id")]
+        if not pending:
+            return
+        pending[0].update(status="failed", error=reason)   # answers arrive in the order the messages were sent
+        self._render_thread()
+        self._scroll_to_end()
+
     # --- data from phone ---
 
     def set_threads(self, payload: dict) -> None:
@@ -389,21 +410,28 @@ class MessagesPage(Gtk.Box, LoadingMixin):
         self._active_address = address
         if self._attachments:
             request_id = uuid.uuid4().hex
-            attachments, self._attachments = self._attachments, []
+            attachments = self._attachments
+            if self._on_send_mms(address, text, attachments, request_id) is False:
+                return   # not connected: keep the text and the pictures so they can be sent later
             self._set_attachments([])
             msg = {"from_me": True, "text": text, "ts": int(time.time() * 1000), "status": "sending",
                    "request_id": request_id, "mms": True,
                    "attachments": [{"thumb": a["data"], "name": a["name"], "mime": a["mime"]} for a in attachments]}
             self._thread_msgs.append(msg)
             self._local_mms.append((address, msg))
-            self._on_send_mms(address, text, attachments, request_id)
             self._render_thread()
             self._scroll_to_end()
             self._entry.set_text("")
             return
-        self._on_send(address, text)
-        self._thread_msgs.append({"from_me": True, "text": text, "ts": None, "status": "sending"})
-        self._append_bubble(True, text, None, "sending")
+        if "," in address or ";" in address:   # a plain text has one recipient; the phone can't send to a list
+            self._set_attachments([], "A text goes to one number. To message several people, attach a picture (sent as MMS).")
+            return
+        self._set_attachments([])
+        if self._on_send(address, text) is False:
+            return   # not connected: the text stays in the box
+        now = int(time.time() * 1000)   # without a time, a redraw would file the bubble under 1970
+        self._thread_msgs.append({"from_me": True, "text": text, "ts": now, "status": "sending"})
+        self._append_bubble(True, text, now, "sending")
         self._scroll_to_end()
         self._entry.set_text("")
 

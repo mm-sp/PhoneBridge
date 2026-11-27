@@ -63,6 +63,57 @@ def main():
         page = FilesPage(FakeServer(conn), net, on_list=lambda p: None, on_get=lambda p: None)
         host.set_content(page); host.present()
 
+        # the browser shows only the folder it asked for (the mounted phone folder receives listings too)
+        def listing(path, name):
+            page.set_listing({"path": path, "entries": [{"name": name, "is_dir": True, "size": 0}]})
+
+        def shown():
+            return page._path, page._path_label.get_label()
+
+        page.navigate("/Download")
+        listing("/Download", "a")
+        check("the requested folder's listing is shown", shown() == ("/Download", "Phone/Download"))
+        listing("/DCIM/Camera", "b")
+        check("a listing for another folder does not move the view", shown() == ("/Download", "Phone/Download"))
+        page.navigate("/Music/")
+        listing("/Music", "c")
+        check("a trailing slash is the same folder", shown() == ("/Music", "Phone/Music"))
+        page.navigate("/")
+        listing("/", "d")
+        check("the root folder is shown", shown() == ("/", "Phone"))
+
+        # PC -> phone rows are matched to the phone's "saved" notice by transfer id
+        def sent_row(key, name, tid=None):
+            page._transfer_row(key, name, "Sending…", incoming=False)
+            if tid:
+                page._on_offered(key, "aaaa", tid)
+
+        def subtitle(key):
+            return page._transfer_rows[key][0].get_subtitle()
+
+        sent_row("out:1.0:data.jpg", "data.jpg", "t-data")
+        sent_row("out:2.0:a.jpg", "a.jpg", "t-a")
+        page.on_phone_saved({"transfer_id": "t-a", "filename": "a (1).jpg", "path": "/Download/a (1).jpg"})
+        check("a file the phone renamed is marked saved", subtitle("out:2.0:a.jpg") == "Saved on phone: /Download/a (1).jpg")
+        check("…and its Cancel button goes away", not page._cancel_buttons["out:2.0:a.jpg"].get_visible())
+        check("…while other rows stay as they were", subtitle("out:1.0:data.jpg") == "Sending…")
+        page._mark_sent("out:2.0:a.jpg")
+        check("a 'sent' update arriving after the notice doesn't undo it", subtitle("out:2.0:a.jpg").startswith("Saved"))
+        page._mark_sent("out:1.0:data.jpg")
+        check("…and without one the row says it is waiting", "waiting for phone" in subtitle("out:1.0:data.jpg"))
+        sent_row("out:3.0:a.jpg", "a.jpg")
+        sent_row("out:4.0:x:a.jpg", "x:a.jpg")
+        page.on_phone_saved({"filename": "a.jpg", "path": "/Download/a.jpg"})
+        check("without an id only the exact file name matches",
+              subtitle("out:3.0:a.jpg").startswith("Saved") and subtitle("out:4.0:x:a.jpg") == "Sending…"
+              and "waiting for phone" in subtitle("out:1.0:data.jpg"))
+        page.on_phone_failed("t-data", "couldn't save data.jpg")
+        check("a file the phone couldn't save is marked failed", subtitle("out:1.0:data.jpg") == "Failed: couldn't save data.jpg"
+              and not page._cancel_buttons["out:1.0:data.jpg"].get_visible())
+        page._mark_sent("out:1.0:data.jpg")
+        page.on_phone_failed("unknown", "x")
+        check("…and stays failed", subtitle("out:1.0:data.jpg").startswith("Failed"))
+
         # a running upload from the phone: partial file + registered inbound transfer
         async def setup():
             inb = file_transfer._Inbound(payload={"size": 10}, device_fp="aaaa", dest_dir=tmp, part_path=tmp / ".pb-x.part", offset=0)

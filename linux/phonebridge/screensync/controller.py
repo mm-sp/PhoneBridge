@@ -231,6 +231,15 @@ class ScreenSyncController:
             self._send_cmd(C.make(Cmd.STOP_MIRRORING, sid, Origin.USER, {"reason": reason}))
         self._restore_display_then(lambda: self._finish_stop(reason))
 
+    def viewer_stopped(self) -> None:
+        """The mirror page stopped: its Stop button, or the page being tidied up. After a failure it is the latter, and
+        the session must keep showing why it failed (_fail has already stopped everything)."""
+        if self.sm.state == State.ERROR:
+            if self.display.pending.read():
+                self._restore_display_then(lambda: None)
+            return
+        self.stop_mirroring("user", stop_local=False)
+
     def _finish_stop(self, reason: str) -> None:
         with self._lock:
             if self.sm.state == State.STOPPING:

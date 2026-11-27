@@ -64,7 +64,12 @@ class PhotosPage(Gtk.Box, LoadingMixin):
             self.reload()
 
     def reset(self) -> None:
+        """The phone (re)connected: a page that was still loading on the old link will never arrive."""
         self._loaded = 0
+        self._total = 0
+        self._loading = False
+        self._spinner.set_visible(False)
+        self._open_when_saved.clear()
 
     def reload(self) -> None:
         while (child := self._flow.get_first_child()) is not None:
@@ -81,6 +86,15 @@ class PhotosPage(Gtk.Box, LoadingMixin):
         self._spinner.set_visible(True)
         self._more_btn.set_visible(False)
         self._on_request_list(self._loaded, PAGE_SIZE)
+
+    def after_refusal(self, _what: str) -> None:
+        self._loading = False
+        self._spinner.set_visible(False)
+        self._more_btn.set_visible(0 < self._loaded < self._total)
+
+    def download_refused(self, message: str) -> None:
+        self._open_when_saved.clear()
+        self._status_row.set_label(message)
 
     def set_photos(self, payload: dict) -> None:
         if payload.get("offset", 0) != self._loaded:

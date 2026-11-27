@@ -238,6 +238,26 @@ page._off_sw.set_active(False)
 check("changing Smart Screen Mode / toggles updates and persists settings", ctl.settings.smart_screen_mode == "disabled" and ctl.settings.auto_screen_off is False
       and '"smart_screen_mode": "disabled"' in (tmp / "screensync.json").read_text())
 
+print("G. a failed session keeps saying why")
+phone = Phone()
+run(phone.connect())
+check("after reconnecting the session resumes", wait_until(lambda: ctl.sm.state.value == "MIRROR_STARTING"
+                                                           and win._mirror_page.is_mirroring()))  # noqa: SLF001
+phone.inbox.clear()
+win._msg_mirror_status({"state": "denied", "message": "Screen capture was declined on the phone"})  # noqa: SLF001
+settle(1.2)
+win._sync_page.refresh()  # noqa: SLF001
+check("the page stops and the phone is told", not win._mirror_page.is_mirroring()  # noqa: SLF001
+      and any(e.type == "mirror.stop" for e in phone.inbox))
+check("the dashboard still shows the failure and its reason", ctl.sm.state.value == "ERROR"
+      and "declined" in win._sync_page._note.get_label() and win._sync_page._rows["mirror"].get_subtitle() == "Error")  # noqa: SLF001
+ctl.start_mirroring(C.Origin.AUTO)
+settle(1.0)
+check("a new attempt clears it", ctl.sm.state.value == "MIRROR_STARTING" and "declined" not in ctl.snapshot()["note"])
+win._mirror_page._on_toggle_clicked(None)  # noqa: SLF001 - the Stop button
+settle(1.0)
+check("the Stop button ends the session as before", ctl.sm.state.value == "DISCONNECTED" and fake.panel_on)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.stdout.flush()
 os._exit(1 if FAIL else 0)
