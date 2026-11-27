@@ -42,7 +42,7 @@ IDENTITIES: dict = {}
 SERVER = {}
 
 
-async def connect(fingerprint: str, handshake: bool = True):
+async def connect(fingerprint: str, handshake: bool = True, confirm: bool = True):
     """Returns (reader, writer, session); a phone that will be refused as busy never gets to the handshake."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
@@ -52,7 +52,8 @@ async def connect(fingerprint: str, handshake: bool = True):
         writer.write((fingerprint + "\n").encode())
         await writer.drain()
         return reader, writer, None
-    session = await phone_connect(reader, writer, fingerprint, KEYS[fingerprint], IDENTITIES[fingerprint], SERVER["tls"])
+    session = await phone_connect(reader, writer, fingerprint, KEYS[fingerprint], IDENTITIES[fingerprint], SERVER["tls"],
+                                  confirm=confirm)
     return reader, writer, session
 
 
@@ -97,6 +98,49 @@ async def main_async() -> int:
     rb, wb, _ = await connect(b.fingerprint)
     await asyncio.sleep(0.3)
     check("phone B is now the connected phone", server.connected_fingerprints() == ["bbbb"])
+    wb.close()
+    await asyncio.sleep(0.3)
+
+    print("4. two phones handshaking at once: only the first to finish gets in")
+    ra, wa, session_a = await connect(a.fingerprint, confirm=False)   # past the first busy check, not yet registered
+    rb, wb, _ = await connect(b.fingerprint)
+    await asyncio.sleep(0.3)
+    wa.write(crypto.pack_frame(session_a.cipher.encrypt(Envelope("control", "hello", 0, {}).to_json())))
+    await wa.drain()
+    reply = await asyncio.wait_for(ra.readline(), 5)
+    check("the later phone gets PBBUSY naming the connected one", reply == b"PBBUSY Phone B\n")
+    check("still only one phone is connected", server.connected_fingerprints() == ["bbbb"])
+    wa.close()
+    wb.close()
+    await asyncio.sleep(0.3)
+
+    print("5. a failure while a new session is being set up does not leave the PC busy")
+    events: list = []
+    server.on_connection_change(lambda conn, up: events.append((conn.fingerprint, up)))
+    real = transport.DeviceConnection.after_handshake
+
+    async def broken(self) -> None:
+        raise OSError("disk full")
+
+    transport.DeviceConnection.after_handshake = broken
+    try:
+        ra, wa, _ = await connect(a.fingerprint)
+        try:
+            closed = await asyncio.wait_for(ra.read(), 5) == b""
+        except ConnectionError:
+            closed = True
+        except asyncio.TimeoutError:
+            closed = False
+    finally:
+        transport.DeviceConnection.after_handshake = real
+    wa.close()
+    await asyncio.sleep(0.3)
+    check("the failed session is closed", closed)
+    check("no dead session stays registered", server.connected_fingerprints() == [])
+    check("the UI is never told it connected", ("aaaa", True) not in events)
+    rb, wb, _ = await connect(b.fingerprint)
+    await asyncio.sleep(0.3)
+    check("another phone can then connect", server.connected_fingerprints() == ["bbbb"])
     wb.close()
 
     serve.cancel()

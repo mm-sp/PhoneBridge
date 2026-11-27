@@ -628,15 +628,7 @@ class ControlChannelServer:
             writer.close()
             return
 
-        busy_with = next((c for fp, c in self._connections.items() if fp != fingerprint), None)
-        if busy_with is not None:
-            log.info("refusing %s: already connected to %s", device.name, busy_with.device.name)
-            writer.write(BUSY_MARKER + busy_with.device.name.encode("utf-8", "replace")[:100] + b"\n")
-            try:
-                await writer.drain()
-            except ConnectionError:
-                pass
-            writer.close()
+        if await self._refuse_if_busy(device, writer):
             return
 
         conn = DeviceConnection(fingerprint, device, reader, writer)
@@ -666,24 +658,26 @@ class ControlChannelServer:
             self.audit(sec_ledger.DENIED, fingerprint, feature="session", message="lockdown_or_revoked_during_handshake")
             writer.close()
             return
+        # Another phone may have completed its handshake while this one was in progress.
+        if await self._refuse_if_busy(device, writer):
+            return
         old = self._connections.get(fingerprint)
         if old is not None:  # phone reconnected before we noticed the old socket died
             old.close()
         self._connections[fingerprint] = conn
-        if not relayed:   # through a relay the peer address is the relay's, not the phone's
-            self._remember_address(device, writer)
         log.info("device connected: %s (%s)%s", device.name, fingerprint, " via relay" if relayed else "")
-        await conn.after_handshake()
         self.throttle.success(ip)
         self.audit(sec_ledger.AUTH_OK, fingerprint, ip=None if relayed else ip, relayed=relayed)
         self.audit(sec_ledger.SESSION_START, fingerprint, session=conn.session_id)
-        self._notify_connection(conn, True)
-        if self.relay is not None:   # tell the phone where to reach us when it is away from this network
-            try:
-                await conn.send("control", "relay.config", {"host": self.relay.host, "port": self.relay.port})
-            except ConnectionError:
-                pass
+        # The session is registered now: whatever fails from here on must reach the cleanup below, or the dead entry
+        # would keep every other phone out as "busy".
         try:
+            if not relayed:   # through a relay the peer address is the relay's, not the phone's
+                self._remember_address(device, writer)
+            await conn.after_handshake()
+            self._notify_connection(conn, True)
+            if self.relay is not None:   # tell the phone where to reach us when it is away from this network
+                await conn.send("control", "relay.config", {"host": self.relay.host, "port": self.relay.port})
             envelope = first
             while True:
                 if envelope is None:
@@ -712,6 +706,20 @@ class ControlChannelServer:
                        how=conn.ended_by or "abrupt", clean=conn.ended_by is not None)
             conn.close()
             conn.session = None
+
+    async def _refuse_if_busy(self, device: PairedDevice, writer: asyncio.StreamWriter) -> bool:
+        """One phone at a time: while a different one is connected, answers with the busy marker and closes."""
+        busy_with = next((c for fp, c in self._connections.items() if fp != device.fingerprint), None)
+        if busy_with is None:
+            return False
+        log.info("refusing %s: already connected to %s", device.name, busy_with.device.name)
+        writer.write(BUSY_MARKER + busy_with.device.name.encode("utf-8", "replace")[:100] + b"\n")
+        try:
+            await writer.drain()
+        except ConnectionError:
+            pass
+        writer.close()
+        return True
 
     @staticmethod
     def _remember_address(device: PairedDevice, writer: asyncio.StreamWriter) -> None:
