@@ -305,6 +305,12 @@ class VideoManager(private val svc: BridgeService) {
             svc.screenSync.onMirrorDenied("Screen sharing was declined on the phone")
             return
         }
+        if (PcAccess.mode(svc, "screen") == PcAccess.Mode.DENY) {   // switched off while Android's prompt was open
+            val message = "Screen mirroring is switched off for the PC on the phone"
+            svc.send("mirror.status", JSONObject().put("state", "denied").put("message", message))
+            svc.screenSync.onMirrorDenied(message)
+            return
+        }
         projectionResult = code to data
         try {
             startMirror(code, data)
@@ -415,16 +421,14 @@ class VideoManager(private val svc: BridgeService) {
                                     fpsRange?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
                                 }.build()
-                            }.getOrNull() ?: return
+                            }.getOrNull() ?: run { failWebcam(stream, "Camera session failed"); return }
                             runCatching { session.setRepeatingRequest(req, null, camHandler) }
                             svc.send("video.started", JSONObject().put("kind", "webcam").put("facing", actualFacing)
                                 .put("width", size.width).put("height", size.height).put("rotation", sensor))
                         }
 
                         override fun onConfigureFailed(session: CameraCaptureSession) {
-                            if (camStream === stream) {
-                                svc.send("webcam.status", JSONObject().put("state", "error").put("message", "Camera session failed"))
-                            }
+                            failWebcam(stream, "Camera session failed")
                         }
                     }, camHandler)
                     } catch (e: Exception) {
@@ -433,12 +437,14 @@ class VideoManager(private val svc: BridgeService) {
                     }
                 }
 
-                override fun onDisconnected(device: CameraDevice) { device.close() }
+                override fun onDisconnected(device: CameraDevice) {
+                    device.close()
+                    failWebcam(stream, "The phone's camera was taken over by another app")
+                }
 
                 override fun onError(device: CameraDevice, error: Int) {
                     device.close()
-                    svc.send("webcam.status", JSONObject().put("state", "error")
-                        .put("message", "Camera error $error — is another app using the camera?"))
+                    failWebcam(stream, "Camera error $error — is another app using the camera?")
                 }
             }, camHandler)
         } catch (e: SecurityException) {
@@ -475,7 +481,19 @@ class VideoManager(private val svc: BridgeService) {
 
     fun onStreamFailed(stream: H264Stream) {
         if (stream === mirrorStream) stopMirror()
-        if (stream === camStream) stopWebcam()
+        if (stream === camStream) endWebcam("error", "The camera's video connection to the PC failed")
+    }
+
+    /** From a camera thread: [stream] can't continue. Nothing happens if it was replaced or stopped meanwhile. */
+    private fun failWebcam(stream: H264Stream, message: String) {
+        svc.main.post { if (camStream === stream) endWebcam("error", message) }
+    }
+
+    /** Ends the camera stream for a reason the PC didn't ask for: releases it and says why, so the PC stops waiting. */
+    fun endWebcam(state: String, message: String) {
+        if (camStream == null) return
+        stopWebcam()
+        svc.send("webcam.status", JSONObject().put("state", state).put("message", message))
     }
 
     fun stopAll() {

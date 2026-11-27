@@ -15,6 +15,8 @@ import java.io.ByteArrayOutputStream
  */
 class NotificationRelay : NotificationListenerService() {
     private val iconCache = HashMap<String, String>()
+    /** Ids of the notifications this phone has put into a message for the PC. */
+    private val sentIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     override fun onListenerConnected() {
         instance = this
@@ -32,21 +34,30 @@ class NotificationRelay : NotificationListenerService() {
         svc.worker.execute { svc.send("notification.posted", out) }
     }
 
+    /** False when the PC may learn nothing about this notification: sharing off, denied, or its app blocked. */
+    private fun shareable(sbn: StatusBarNotification): Boolean =
+        Privacy.notificationsEnabled(this) && PcAccess.mode(this, "notifications") != PcAccess.Mode.DENY &&
+            sbn.packageName !in Privacy.blockedApps(this)
+
     /** What the privacy settings allow to be shared for this notification (null = nothing), with text hidden if required. */
     private fun outgoing(sbn: StatusBarNotification): JSONObject? {
-        if (!Privacy.notificationsEnabled(this) || PcAccess.mode(this, "notifications") == PcAccess.Mode.DENY) return null
-        if (sbn.packageName in Privacy.blockedApps(this)) return null
+        if (!shareable(sbn)) return null
         val json = toJson(sbn)
         val sensitive = Privacy.isSensitive(sbn.packageName, json.optString("title") + " " + json.optString("text"))
         if (Privacy.hideNotificationText(this) || (sensitive && Privacy.hideSensitive(this))) {
             json.put("title", json.optString("app")).put("text", "Content hidden").put("hidden", true)
             json.put("actions", JSONArray())   // no reply box for a notification whose text the PC may not see
         }
+        sentIds.add(sbn.key)
         return json
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         val svc = BridgeService.instance ?: return
+        // The id alone names the app, so it only goes out if the PC may know it, or already does (so a notification shown
+        // there before sharing was switched off still disappears).
+        val known = sentIds.remove(sbn.key)
+        if (!known && !shareable(sbn)) return
         svc.send("notification.removed", JSONObject().put("id", sbn.key))
     }
 

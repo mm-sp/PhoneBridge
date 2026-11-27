@@ -261,10 +261,6 @@ class Connection private constructor(private val socket: SSLSocket, pc: PairedPc
     }
 }
 
-class UnpairedException : Exception("this PC no longer has this phone paired")
-
-class BusyException(val otherPhone: String) : Exception("PC is connected to $otherPhone")
-
 /**
  * Certificate pinning: the PC's self-signed certificate is trusted if, and only if, its SHA-256 equals the fingerprint
  * handed over (inside the PIN-authenticated channel) at pairing. There is no CA, no hostname check and no expiry check by

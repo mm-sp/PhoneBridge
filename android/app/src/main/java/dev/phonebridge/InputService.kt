@@ -89,12 +89,18 @@ class InputService : AccessibilityService() {
 
     private fun sendToPc(text: String) {
         val svc = BridgeService.instance ?: return
+        if (!Clipboard.allowed(this)) return   // clipboard sync switched off or denied: nothing leaves the phone
         svc.lastClipText = text
         svc.send("clipboard.update", JSONObject().put("text", text).put("copied_on_phone", true))
     }
 
     /** PC's "Copy" button: send whatever is selected on the phone right now. */
     fun copySelection() {
+        if (!Clipboard.allowed(this)) {
+            BridgeService.instance?.send("mirror.status", JSONObject().put("state", "clipboard_off")
+                .put("message", "Clipboard sync is switched off for the PC on the phone (Security tab)"))
+            return
+        }
         val sel = lastSelection ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { node ->
             val t = node.text?.toString() ?: return@let null
             val a = minOf(node.textSelectionStart, node.textSelectionEnd)
@@ -254,7 +260,9 @@ class InputService : AccessibilityService() {
         val existing = node.text?.toString().takeUnless { node.isShowingHintText } ?: return
         if (existing.isEmpty()) return
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, existing.dropLast(1))
+            // By code point: dropping one UTF-16 unit would leave half of an emoji behind.
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                existing.substring(0, existing.offsetByCodePoints(existing.length, -1)))
         })
     }
 

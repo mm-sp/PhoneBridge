@@ -45,7 +45,9 @@ object PcAccess {
         type == "call.dial" -> "call_dial"
         type == "calls.history_request" || type == "contacts.list_request" || type == "call.action" -> "calls"
         type == "clipboard.update" -> "clipboard"
-        type == "mirror.start" || type == "mirror.stop" || type.startsWith("webcam.") -> "screen"
+        // Stopping a stream only takes access away, so it is never blocked and never prompts.
+        type == "mirror.stop" || type == "webcam.stop" -> null
+        type == "mirror.start" || type.startsWith("webcam.") -> "screen"
         type == "mirror.input" || type == "hotspot.request" || type == "screen.state_request" ||
             type in setOf("wake", "unlock", "lock", "volume_up", "volume_down", "volume_mute", "copy") -> "remote_control"
         type.startsWith("apps.") -> "apps"
@@ -62,11 +64,52 @@ object PcAccess {
         PhoneAudit.log(ctx, "permission.changed", "feature" to feature, "mode" to mode.name.lowercase())
     }
 
+    /** What "Ask" remembers about each connection: an answer the user gave, yes or no, holds until it ends. Nothing is
+     *  remembered for [ASK_EVERY_TIME] features, or when nobody answered. */
+    class SessionAnswers {
+        private val answers = ConcurrentHashMap<String, Boolean>()
+        fun get(sessionId: String, feature: String): Boolean? = answers["$sessionId/$feature"]
+        fun record(sessionId: String, feature: String, answer: Boolean?) {
+            if (answer != null && feature !in ASK_EVERY_TIME) answers["$sessionId/$feature"] = answer
+        }
+    }
+
+    /** Requests that only read something and that the PC sends in bursts (history and contacts together, say). While the
+     *  prompt for their permission is open they wait for its answer. Nothing else does: input, calls, messages and other
+     *  actions must not run later than the user expects, and are refused until there is an answer. */
+    private val CAN_WAIT = setOf("sms.list_threads", "sms.get_thread", "calls.history_request", "contacts.list_request",
+        "notifications.sync", "photos.list", "files.list", "apps.list_request")
+
+    fun canWait(type: String) = type in CAN_WAIT
+
+    /** The requests waiting for one open prompt, per key (connection and permission). */
+    class Waiting<T>(private val limit: Int = 16) {
+        private val held = HashMap<String, MutableList<T>>()
+        /** A prompt for [key] is about to be shown. */
+        @Synchronized fun open(key: String) { held.getOrPut(key) { mutableListOf() } }
+        @Synchronized fun isOpen(key: String) = key in held
+        /** False if no prompt for [key] is open, or too many requests are waiting for it already. */
+        @Synchronized fun hold(key: String, item: T): Boolean {
+            val list = held[key] ?: return false
+            if (list.size >= limit) return false
+            return list.add(item)
+        }
+        /** The prompt is over: what waited for it, oldest first. */
+        @Synchronized fun close(key: String): List<T> = held.remove(key) ?: emptyList()
+    }
+
+    /** The `permission.denied` payload for a request: names it by the ids the PC chose (never its content), so the PC
+     *  knows which of its requests failed. */
+    fun denial(feature: String, type: String, p: JSONObject): JSONObject {
+        val out = JSONObject().put("feature", feature).put("type", type)
+        for (id in listOf("transfer_id", "request_id", "path")) if (p.has(id)) out.put(id, p.optString(id))
+        return out
+    }
+
     // ---- "Ask": a notification with Allow / Deny, answered through PcAccessReceiver
     private val pending = ConcurrentHashMap<String, CompletableFuture<Boolean>>()
     private const val ACTION = "dev.phonebridge.PC_ACCESS_ANSWER"
 
-    /** Blocks (never call on the connection's reader thread) until the user answers or 45 s pass; no answer = deny. */
     private val requestSeq = java.util.concurrent.atomic.AtomicInteger()
 
     /** Describes WHAT is being requested for the prompt (a recipient or number, never a message body). */
@@ -77,7 +120,9 @@ object PcAccess {
         else -> ""
     }
 
-    fun ask(ctx: Context, feature: String, detail: String = ""): Boolean {
+    /** Blocks (never call on the connection's reader thread) until the user answers or 45 s pass. Returns the answer,
+     *  or null if there was none; only `true` allows anything. */
+    fun ask(ctx: Context, feature: String, detail: String = ""): Boolean? {
         // Per-request features get their own prompt every time; others share one prompt per feature.
         val key = if (feature in ASK_EVERY_TIME) "$feature#${requestSeq.incrementAndGet()}" else feature
         val fut = pending.computeIfAbsent(key) { CompletableFuture() }
@@ -103,7 +148,7 @@ object PcAccess {
         return try {
             fut.get(45, TimeUnit.SECONDS)
         } catch (_: Exception) {
-            false
+            null
         } finally {
             pending.remove(key, fut)
             nm.cancel(id)

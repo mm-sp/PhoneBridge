@@ -172,6 +172,13 @@ class ScreenSync(private val svc: BridgeService) {
                 if (sessionId.isEmpty() || sm.state == SyncState.DISCONNECTED || sm.state == SyncState.ERROR) sessionId = c.sessionId
                 if (!prefs.autoAppSync && c.origin != Origin.USER) return true to "sync_disabled"
                 if (sm.state in SyncStateMachine.MIRRORING) return true to "already_active"
+                // The "screen" permission applies to this route too. With "Ask", the mirror.start the PC sends alongside
+                // raises the prompt and starts the capture once allowed.
+                when (PcAccess.mode(svc, "screen")) {
+                    PcAccess.Mode.DENY -> return false to "permission_denied"
+                    PcAccess.Mode.ASK -> return true to "awaiting_permission"
+                    PcAccess.Mode.ALLOW -> {}
+                }
                 main.post { svc.video.requestMirror() }   // idempotent while a consent prompt is pending (VideoManager)
                 return true to "starting"
             }

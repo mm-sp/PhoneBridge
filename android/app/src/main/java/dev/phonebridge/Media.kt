@@ -28,6 +28,9 @@ object Transfer {
     /** Transfers block for a long time; keep them off the small general worker pool. */
     val pool: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newCachedThreadPool()
 
+    /** Files the user picks on the phone: two at a time, the rest wait their turn. */
+    val uploads: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newFixedThreadPool(2)
+
     /** file.accept / file.reject answers for offers this phone made, by transfer id. */
     val pending = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<JSONObject>>()
 
@@ -297,7 +300,7 @@ object Files {
                 part.delete()   // cancelled on purpose: nothing to resume
             } else {
                 // The partial file stays so the next attempt resumes where this one stopped.
-                svc.send("error", JSONObject().put("message", "Transfer of $name failed: ${e.message}"))
+                svc.send("error", JSONObject().put("message", "Transfer of $name failed: ${e.message}").put("transfer_id", tid))
             }
             return
         } finally { svc.releaseWake(); Transfer.unregister(tid) }

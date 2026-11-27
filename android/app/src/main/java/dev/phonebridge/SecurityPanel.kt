@@ -127,7 +127,13 @@ class SecurityPanel(act: Activity) : PcPanel(act) {
             for (m in PcAccess.Mode.values()) {
                 val b = Ui.button(act, m.name.lowercase().replaceFirstChar { it.uppercase() },
                     if (m == current) Ui.Kind.PRIMARY else Ui.Kind.SECONDARY) {
-                    PcAccess.setMode(act, feature, m); render()
+                    PcAccess.setMode(act, feature, m)
+                    // Switching it off also ends a screen or camera stream that is already running.
+                    if (feature == "screen" && m == PcAccess.Mode.DENY) BridgeService.instance?.video?.let {
+                        it.endWebcam("stopped", "Camera and screen sharing were switched off for the PC on the phone")
+                        it.stopAll()
+                    }
+                    render()
                 }
                 b.layoutParams = LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(6); topMargin = dp(6) }
                 modes.addView(b)

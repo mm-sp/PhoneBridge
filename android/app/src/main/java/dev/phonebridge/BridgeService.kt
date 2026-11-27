@@ -139,12 +139,22 @@ class BridgeService : Service() {
                 return
             }
             if (downSince != null && System.currentTimeMillis() - downSince > GIVE_UP_MS) {
-                stopQuietly("Couldn't reach ${pc.name}, so PhoneBridge stopped. Tap Connect to PC to try again.")
+                stopQuietly((if (pcBusy) "${pc.name} is still connected to another phone" else "Couldn't reach ${pc.name}") +
+                    ", so PhoneBridge stopped. Tap Connect to PC to try again.")
                 return
             }
             setState(State.CONNECTING, "Connecting to ${pc.name}…")
-            val c = tryOpen(pc)
+            val c = try {
+                tryOpen(pc)
+            } catch (e: BusyException) {
+                waitWhileBusy(pc, e)
+                continue
+            } catch (e: UnpairedException) {
+                stopForgotten(pc)
+                return
+            }
             if (c == null) {
+                pcBusy = false
                 setState(State.DISCONNECTED, "Can't reach ${pc.name} — is PhoneBridge open on the PC and on the same Wi-Fi?")
                 sleepUntilWoken(backoffMs)
                 backoffMs = (backoffMs * 2).coerceAtMost(30_000)
@@ -159,19 +169,18 @@ class BridgeService : Service() {
                 while (running && !c.closed) {
                     val env = c.recv()
                     downSince = null  // the PC is really talking to us (not busy/unpaired)
+                    pcBusy = false
                     dispatch(c, env)
                 }
             } catch (e: BusyException) {
                 c.close()
                 conn = null
-                setState(State.DISCONNECTED, "${pc.name} is connected to another phone (${e.otherPhone}). " +
-                    "This phone will connect when it's free.")
-                sleepUntilWoken(20_000)
+                waitWhileBusy(pc, e)
                 continue
             } catch (e: UnpairedException) {
                 c.close()
                 conn = null
-                stopQuietly("${pc.name} forgot this phone. Tap \"Scan QR code on PC\" to pair again.")
+                stopForgotten(pc)
                 return
             } catch (e: Exception) {
                 Log.i(TAG, "connection lost: $e")
@@ -206,44 +215,53 @@ class BridgeService : Service() {
         }
     }
 
+    /** null = no route reached the PC. Throws [BusyException] / [UnpairedException] when the PC answered with a refusal. */
     private fun tryOpen(pc: PairedPc): Connection? {
         Relay.active = false
         // USB first: if the PC set up `adb reverse`, localhost reaches it through the cable (nothing on any network).
         // With no tunnel this is refused instantly and costs nothing.
-        try {
-            val c = Connection.open(pc, host = Connection.USB_HOST, port = pc.lanPort)
+        tryRoute { Connection.open(pc, host = Connection.USB_HOST, port = pc.lanPort) }?.let {
             Log.i(TAG, "connected over USB")
-            return c
-        } catch (_: Exception) {
+            return it
         }
-        try {
-            return Connection.open(pc)
-        } catch (e: Exception) {
+        tryRoute({ e ->
             Log.i(TAG, "direct connect to ${pc.lanIp} failed: $e")
             if (e is SecureSession.HandshakeException) PhoneAudit.log(this, "auth.failed", "reason" to (e.message ?: "handshake"))
-        }
+        }) { Connection.open(pc) }?.let { return it }
         val found = Mdns.find(this, pc) ?: Connection.discover(pc)
         if (found != null) {
-            try {
-                val c = Connection.open(pc, host = found.first, port = found.second)
+            tryRoute({ e -> Log.i(TAG, "connect to discovered ${found.first} failed: $e") }) {
+                Connection.open(pc, host = found.first, port = found.second)
+            }?.let {
                 Store.updateLan(this, found.first, found.second)
-                return c
-            } catch (e: Exception) {
-                Log.i(TAG, "connect to discovered ${found.first} failed: $e")
+                return it
             }
         }
         // Not on the PC's network: meet it at the relay, if the PC gave us one.
         if (Relay.host != null) {
             Relay.active = true
-            try {
-                return Connection.open(pc)
-            } catch (e: Exception) {
+            tryRoute({ e ->
                 Log.i(TAG, "relay connect failed: $e")
                 Relay.active = false
-            }
+            }) { Connection.open(pc) }?.let { return it }
         }
         return null
     }
+
+    /** The PC is serving another phone: say so and look again a little later. */
+    private fun waitWhileBusy(pc: PairedPc, e: BusyException) {
+        pcBusy = true
+        setState(State.DISCONNECTED, "${pc.name} is connected to another phone (${e.otherPhone}). " +
+            "Trying again for up to 2 minutes.")
+        sleepUntilWoken(20_000)
+    }
+
+    /** The PC's last answer was "busy" (connection thread only). */
+    private var pcBusy = false
+
+    /** The PC no longer knows this phone: retrying cannot help, so stop and ask for a new pairing. */
+    private fun stopForgotten(pc: PairedPc) =
+        stopQuietly("${pc.name} forgot this phone. Tap \"Scan QR code on PC\" to pair again.")
 
     private fun sleepUntilWoken(ms: Long) {
         synchronized(wakeSignal) { runCatching { wakeSignal.wait(ms) } }
@@ -334,7 +352,8 @@ class BridgeService : Service() {
     // ---------------------------------------------------------------- dispatch
 
     private val askPool = java.util.concurrent.Executors.newCachedThreadPool()
-    private val sessionGrants = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+    private val askAnswers = PcAccess.SessionAnswers()
+    private val askWaiting = PcAccess.Waiting<JSONObject>()
 
     /** Zero-trust gate: a paired PC may only do what the permission manager (PcAccess) allows for each feature. */
     private fun dispatch(c: Connection, env: JSONObject) {
@@ -344,20 +363,28 @@ class BridgeService : Service() {
         if (feature == null) { dispatchAllowed(c, env); return }
         when (PcAccess.mode(this, feature)) {
             PcAccess.Mode.ALLOW -> dispatchAllowed(c, env)
-            PcAccess.Mode.DENY -> deny(feature, type)
+            PcAccess.Mode.DENY -> deny(feature, env)
             PcAccess.Mode.ASK -> {
                 val sid = c.session?.sessionId ?: ""
                 val each = feature in PcAccess.ASK_EVERY_TIME
+                val key = "$sid/$feature"
+                // A prompt is already open for this connection: don't pile up prompts. Reads wait for its answer.
+                if (!each && PcAccess.canWait(type) && askWaiting.hold(key, env)) return
+                val earlier = askAnswers.get(sid, feature)
                 when {
-                    !each && sessionGrants[sid]?.contains(feature) == true -> dispatchAllowed(c, env)
-                    !each && PcAccess.isPending(feature) -> deny(feature, type)   // a prompt is already open: don't pile up requests
-                    else -> askPool.execute {
-                        if (PcAccess.ask(this, feature, PcAccess.describe(type, p))) {
-                            if (!each) sessionGrants.getOrPut(sid) { java.util.concurrent.CopyOnWriteArraySet() }.add(feature)
-                            PhoneAudit.log(this, "access.granted", "feature" to feature, "once" to each)
-                            dispatchAllowed(c, env)
-                        } else {
-                            deny(feature, type)
+                    earlier == true -> dispatchAllowed(c, env)
+                    earlier == false -> deny(feature, env)
+                    !each && (askWaiting.isOpen(key) || PcAccess.isPending(feature)) -> deny(feature, env)
+                    else -> {
+                        if (!each) askWaiting.open(key)
+                        askPool.execute {
+                            // A prompt that can't be shown counts as no answer (the waiting requests must still be released).
+                            val answer = runCatching { PcAccess.ask(this, feature, PcAccess.describe(type, p)) }.getOrNull()
+                            askAnswers.record(sid, feature, answer)
+                            val requests = listOf(env) + (if (each) emptyList() else askWaiting.close(key))
+                            for (request in requests) {
+                                if (answer == true) runApproved(c, request, feature, each) else deny(feature, request)
+                            }
                         }
                     }
                 }
@@ -365,9 +392,22 @@ class BridgeService : Service() {
         }
     }
 
-    private fun deny(feature: String, type: String) {
+    /** The user said yes, possibly long after the request: it is only carried out if the connection that asked is still
+     *  the live one (not lost, replaced or ended by "Disconnect now") and the feature wasn't switched off meanwhile. */
+    private fun runApproved(c: Connection, env: JSONObject, feature: String, once: Boolean) {
+        if (c !== conn || c.closed || PcAccess.mode(this, feature) == PcAccess.Mode.DENY) {
+            PhoneAudit.log(this, "access.denied", "feature" to feature, "message" to env.optString("type"), "reason" to "expired")
+            send("error", JSONObject().put("message", "The phone's approval came too late, so nothing was done. Try again."))
+            return
+        }
+        PhoneAudit.log(this, "access.granted", "feature" to feature, "once" to once)
+        dispatchAllowed(c, env)
+    }
+
+    private fun deny(feature: String, env: JSONObject) {
+        val type = env.optString("type")
         PhoneAudit.log(this, "access.denied", "feature" to feature, "message" to type)
-        send("permission.denied", JSONObject().put("feature", feature).put("type", type))
+        send("permission.denied", PcAccess.denial(feature, type, env.optJSONObject("payload") ?: JSONObject()))
     }
 
     /** Emergency stop from the Security tab: end the session now and stay off until the user taps Connect again. */
@@ -390,6 +430,10 @@ class BridgeService : Service() {
             "file.accept" -> Transfer.onAnswer(p, rejected = false)
             "file.reject" -> Transfer.onAnswer(p, rejected = true)
             "file.done", "pong" -> {}
+            // The PC's permissions refused something sent to it. A refused file offer gets no file.reject.
+            "permission.denied" -> if (p.optString("type") == "file.offer") {
+                Transfer.onAnswer(p.put("reason", "the PC doesn't allow it (PhoneBridge on the PC, Security tab)"), rejected = true)
+            }
             "session.end" -> {
                 // The PC closed this session on purpose (authenticated, unlike a bare TCP close): it was not truncated.
                 c.peerEnded = true

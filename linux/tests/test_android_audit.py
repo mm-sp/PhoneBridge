@@ -101,6 +101,26 @@ def main():
             check(f"{t} is gated as '{f}'", feats.get(t) == f)
         for t in ("ping", "device.info_request", "relay.config", "link.disconnect", "rekey", "identity.rotate", "session.end"):
             check(f"{t} (housekeeping) needs no permission", feats.get(t) == "null")
+        for t in ("mirror.stop", "webcam.stop"):
+            check(f"{t} is never blocked (it only takes access away)", feats.get(t) == "null")
+        check("webcam.switch is gated as 'screen'", feats.get("webcam.switch") == "screen")
+        print("3. what 'Ask' remembers for one connection")
+        check("a yes is remembered", d.get("ANSWER_YES") == "true")
+        check("a no is remembered", d.get("ANSWER_NO") == "false")
+        check("no answer is not remembered", d.get("ANSWER_NONE") == "null")
+        check("sending messages and placing calls ask every time", d.get("ANSWER_EVERY_TIME") == "null null")
+        check("a new connection starts with nothing remembered", d.get("ANSWER_OTHER_SESSION") == "null null")
+        print("4. requests that arrive while a prompt is open, and what a refusal says")
+        check("reads the PC sends in bursts can wait for the answer", d.get("CAN_WAIT") == "true")
+        check("sends, calls, input and other actions never wait", d.get("MUST_NOT_WAIT") == "true")
+        check("without an open prompt nothing is held", d.get("WAIT_NO_PROMPT") == "false false")
+        check("an open prompt holds requests, up to its limit", d.get("WAIT_HELD") == "true true false")
+        check("…only for its own connection and permission", d.get("WAIT_OTHER_KEY") == "false")
+        check("the answer releases them in order", d.get("WAIT_RELEASED") == "a,b")
+        check("…and nothing is held afterwards", d.get("WAIT_CLOSED") == "false 0")
+        check("a refused offer is named by its transfer id, not its file name",
+              d.get("DENIAL_OFFER") == "feature,transfer_id,type t1")
+        check("a refusal never repeats a number or message text", d.get("DENIAL_SMS") == "feature,type")
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 

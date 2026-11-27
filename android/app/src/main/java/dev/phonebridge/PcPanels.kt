@@ -273,11 +273,14 @@ class FilesPanel(act: Activity) : PcPanel(act) {
             if (size < 0) continue
             status.text = "Sending $name to the PC (Downloads/PhoneBridge)…"
             val mime = act.contentResolver.getType(uri) ?: "application/octet-stream"
-            svc.worker.execute {
-                val ok = runCatching {
+            Transfer.uploads.execute {   // not svc.worker: a few big files would stall everything else the phone answers
+                val failure = runCatching {
                     Transfer.send(svc, act.contentResolver.openInputStream(uri)!!, name, size, mime)
-                }.isSuccess
-                svc.main.post { status.text = if (ok) "Sent $name to the PC's Downloads/PhoneBridge" else "Couldn't send $name" }
+                }.exceptionOrNull()
+                svc.main.post {
+                    status.text = if (failure == null) "Sent $name to the PC's Downloads/PhoneBridge"
+                                  else "Couldn't send $name: ${failure.message ?: failure.javaClass.simpleName}"
+                }
             }
         }
     }

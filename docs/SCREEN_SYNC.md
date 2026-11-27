@@ -91,7 +91,9 @@ removes the marker (retrying for 45 s if adb is briefly unreachable). It never d
 
 ## Security
 Commands are accepted only from the authenticated peer (existing handshake) and only if the device's **Screen** permission is
-Allow/granted (`sync.*` maps to `screen`). Per-command allow-list by direction, strict argument schemas, `command_id` replay
+Allow/granted (`sync.*` maps to `screen`). On the phone, `START_MIRRORING` starts a capture only while the phone's own
+**Screen** permission is Allow: with Deny it is refused (`permission_denied`), with Ask it only acknowledges
+(`awaiting_permission`) and the accompanying `mirror.start` raises the prompt. Per-command allow-list by direction, strict argument schemas, `command_id` replay
 cache (2048 / 15 min, duplicate → idempotent ack), ±5 min timestamp window, session binding, never raises on junk. Remote input
 needs the PhoneBridge Accessibility service the user enabled on the phone; the capture needs Android's own prompt each time.
 ADB use is limited to `cmd display power-*`/`help`, `dumpsys display|power`, `getprop ro.build.version.sdk`, `ip -o -4 addr` (to match the phone), `adb connect <your Wireless Debugging address>`, `am start -n dev.phonebridge/.MainActivity`, `input keyevent
