@@ -75,7 +75,7 @@ def accept_one_pairing_wifi(
                 from . import netutil
 
                 lan_ip = netutil.local_lan_ip() or lan_ip
-            return run_pairing_handshake(conn, pending, lan_ip, lan_port, cert_fingerprint, confirm)
+            return run_pairing_handshake(conn, pending, lan_ip, lan_port, cert_fingerprint, confirm, cancel)
         finally:
             conn.close()
     finally:

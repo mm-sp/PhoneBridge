@@ -5,6 +5,8 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,6 +34,46 @@ def check(label, cond):
 class FakeServer:
     port = 28100
     cert_fingerprint = "ab" * 32
+
+
+def during_handshake(win):
+    """A listener whose phone was allowed is still busy: the code is spent, but nothing may be swapped yet."""
+    win._cancel.set()                      # end the real listeners
+    current, cancel = win._pending, threading.Event()
+    current.used = True
+    seen = {}
+    context = GLib.MainContext.default()
+
+    def phone_still_confirming(*_a, **kwargs):
+        answers = threading.Timer(0.3, lambda: seen.__setitem__("asked", True))
+        answers.start()
+        win._busy = threading.current_thread()   # what _confirm does once the question is up
+        seen["entered"] = True
+        release.wait(10)
+        raise pairing.PairingError("the phone cancelled")
+
+    release = threading.Event()
+    real = wifi_pairing.accept_one_pairing_wifi
+    wifi_pairing.accept_one_pairing_wifi = phone_still_confirming
+    try:
+        listener = threading.Thread(target=win._listen, args=("wifi", current, cancel), daemon=True)
+        listener.start()
+        for _ in range(200):
+            if seen.get("entered"):
+                break
+            time.sleep(0.02)
+        win._tick()
+        check("while the phone is still confirming, the spent code is not swapped", win._pending is current)
+        release.set()
+        listener.join(5)
+        while context.iteration(False):
+            pass
+        check("when that handshake ends the dialog is free again", win._busy is None and not listener.is_alive())
+        wifi_pairing.accept_one_pairing_wifi = real
+        win._tick()
+        check("…and the next tick brings a new code", win._pending is not current)
+    finally:
+        wifi_pairing.accept_one_pairing_wifi = real
 
 
 def main():
@@ -67,6 +109,7 @@ def main():
             check("the displayed PIN changed with it", pin1 != pin2 and p.token in pin2.replace(" ", ""))
             check("the expired code can no longer pair anyone", p1.is_spent())
             check("the new code is fresh", not p.is_spent())
+            during_handshake(win)
             win.close(); app.quit()
             return False
 

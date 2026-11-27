@@ -62,7 +62,9 @@ class PairingWindow(Adw.Window):
         toolbar.set_content(box)
         self.set_content(toolbar)
 
-        self._busy = False   # a phone is mid-handshake / the user is deciding: don't swap the code under them
+        # The listener thread whose phone is past the code check (the user is deciding, or the phone's confirmation is still
+        # to come): don't swap the code or the listeners under it.
+        self._busy: threading.Thread | None = None
         self._finished = False
         self.connect("close-request", self._on_close)
         GLib.idle_add(self._start_pairing)
@@ -107,7 +109,7 @@ class PairingWindow(Adw.Window):
         self._status_label.set_label(f"Waiting for your phone ({' or '.join(routes)})…")
         self._done = threading.Lock()
         self._finished = False
-        self._busy = False
+        self._busy = None
         pending, cancel = self._pending, self._cancel
         threading.Thread(target=self._listen, args=("wifi", pending, cancel), daemon=True).start()
         threading.Thread(target=self._open_usb_route, args=(cancel,), daemon=True).start()
@@ -132,38 +134,47 @@ class PairingWindow(Adw.Window):
         dialog closes. A wrong/expired PIN is reported but the dialog keeps waiting."""
         while not cancel.is_set():
             try:
-                if route == "wifi":
-                    device = wifi_pairing.accept_one_pairing_wifi(
-                        pending, lan_port=self._server.port,
-                        cert_fingerprint=self._server.cert_fingerprint, confirm=self._confirm,
-                        cancel=cancel,
-                    )
-                else:
-                    device = bluetooth_transport.accept_one_pairing(
-                        pending, lan_ip=netutil.local_lan_ip(), lan_port=self._server.port,
-                        cert_fingerprint=self._server.cert_fingerprint, confirm=self._confirm,
-                        cancel=cancel,
-                    )
-            except bluetooth_transport.PairingCancelled:
-                return
-            except OSError as exc:
-                if route == "bt":
-                    return  # Bluetooth unusable right now — Wi-Fi keeps going
+                if self._attempt(route, pending, cancel):
+                    return
+            finally:
+                # Only now is this thread's handshake over (it goes on well past the Allow question).
+                if self._busy is threading.current_thread():
+                    self._busy = None
+
+    def _attempt(self, route: str, pending, cancel: threading.Event) -> bool:
+        """One accepted connection. True when this route should stop listening."""
+        try:
+            if route == "wifi":
+                device = wifi_pairing.accept_one_pairing_wifi(
+                    pending, lan_port=self._server.port,
+                    cert_fingerprint=self._server.cert_fingerprint, confirm=self._confirm,
+                    cancel=cancel,
+                )
+            else:
+                device = bluetooth_transport.accept_one_pairing(
+                    pending, lan_ip=netutil.local_lan_ip(), lan_port=self._server.port,
+                    cert_fingerprint=self._server.cert_fingerprint, confirm=self._confirm,
+                    cancel=cancel,
+                )
+        except bluetooth_transport.PairingCancelled:
+            return True
+        except OSError as exc:
+            if route != "bt":   # Bluetooth unusable right now — Wi-Fi keeps going
                 GLib.idle_add(self._on_failed, f"Wi-Fi pairing unavailable: {exc}")
-                return
-            except Exception as exc:  # noqa: BLE001 - bad PIN, phone hung up… keep waiting
-                if pending.is_spent():
-                    GLib.idle_add(self._on_failed, f"{exc}")   # the timer swaps in a fresh code
-                    return
-                GLib.idle_add(self._on_failed, f"{exc} — try again")
-                continue
-            with self._done:
-                if self._finished:
-                    return
-                self._finished = True
-            cancel.set()  # stop the other route's listener
-            GLib.idle_add(self._on_success, device)
-            return
+            return True
+        except Exception as exc:  # noqa: BLE001 - bad PIN, phone hung up… keep waiting
+            if pending.is_spent():
+                GLib.idle_add(self._on_failed, f"{exc}")   # the timer swaps in a fresh code
+                return True
+            GLib.idle_add(self._on_failed, f"{exc} — try again")
+            return False
+        with self._done:
+            if self._finished:
+                return True
+            self._finished = True
+        cancel.set()  # stop the other route's listener
+        GLib.idle_add(self._on_success, device)
+        return True
 
     def _confirm(self, phone_name: str, code: str) -> bool:
         """Runs on a listener thread: asks the user on the GTK thread whether to allow this
@@ -196,16 +207,14 @@ class PairingWindow(Adw.Window):
                 dialog.present()
                 return False
 
-            self._busy = True   # the code was just consumed; keep this dialog's session until the user answers
-            try:
-                GLib.idle_add(ask)
-                deadline = time.monotonic() + 120   # the one-minute code life covers the phone's proof, not the user's decision
-                while not answered.wait(0.5):
-                    if self._cancel.is_set() or self._pending is None or time.monotonic() > deadline:
-                        return False
-                return result["allow"]
-            finally:
-                self._busy = False
+            # The code was just consumed: keep this dialog's session until this thread's whole handshake ends (_listen).
+            self._busy = threading.current_thread()
+            GLib.idle_add(ask)
+            deadline = time.monotonic() + 120   # the one-minute code life covers the phone's proof, not the user's decision
+            while not answered.wait(0.5):
+                if self._cancel.is_set() or self._pending is None or time.monotonic() > deadline:
+                    return False
+            return result["allow"]
 
     def _on_success(self, device: pairing.PairedDevice) -> bool:
         self._spinner.set_visible(False)

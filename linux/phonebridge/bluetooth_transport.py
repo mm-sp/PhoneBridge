@@ -8,8 +8,10 @@ module is written and reviewed carefully but has not been exercised against real
 from __future__ import annotations
 
 import json
+import select
 import socket
 import threading
+import time
 from collections.abc import Callable
 
 from . import crypto
@@ -25,11 +27,26 @@ def _send_line(sock: socket.socket, obj: dict) -> None:
 
 MAX_PAIRING_LINE = 8192     # a pairing message is a few hundred bytes
 PAIRING_READ_DEADLINE = 30  # seconds for one whole message: a slow-drip peer can't hold the single pairing slot
+# After the PC's user clicks Allow, the phone asks its own user to compare the code (the app waits 3 minutes) before it
+# sends its identity key. Giving up earlier would leave the phone believing in a pairing this PC has thrown away.
+PHONE_CONFIRM_DEADLINE = 190
+
+
+class _NotConfirmed(PairingError):
+    """The phone's side of the confirmation never came."""
+
+
+def _await_phone(sock: socket.socket, cancel: threading.Event | None) -> None:
+    """Waits for the phone to start answering, for as long as its user may be deciding."""
+    deadline = time.monotonic() + PHONE_CONFIRM_DEADLINE
+    while not select.select([sock], [], [], _ACCEPT_POLL_SECONDS)[0]:
+        if cancel is not None and cancel.is_set():
+            raise _NotConfirmed("pairing was closed on the PC before the phone confirmed it")
+        if time.monotonic() > deadline:
+            raise _NotConfirmed("the code was not confirmed on the phone in time")
 
 
 def _recv_line(sock: socket.socket) -> dict:
-    import time
-
     buf = bytearray()
     deadline = time.monotonic() + PAIRING_READ_DEADLINE
     while True:
@@ -56,8 +73,6 @@ def _send_encrypted_frame(sock: socket.socket, cipher: crypto.SessionCipher, obj
 
 
 def _recv_encrypted_frame(sock: socket.socket, cipher: crypto.SessionCipher) -> dict:
-    import time
-
     deadline = time.monotonic() + PAIRING_READ_DEADLINE
 
     def read_exact(n: int) -> bytes:
@@ -85,13 +100,26 @@ ConfirmFn = Callable[[str, str], bool]
 
 def run_pairing_handshake(
     conn: socket.socket, pending: PendingPairing, lan_ip: str, lan_port: int, cert_fingerprint: str,
-    confirm: ConfirmFn,
+    confirm: ConfirmFn, cancel: threading.Event | None = None,
 ) -> PairedDevice:
     """The PROTOCOL.md section 1 exchange over an already-connected stream socket —
     identical whether the phone reached us over Bluetooth RFCOMM or Wi-Fi TCP.
 
     Nothing is saved until the phone has proved it knows the PIN *and* the user has
-    allowed it via `confirm` (which may block while a dialog is shown)."""
+    allowed it via `confirm` (which may block while a dialog is shown).
+
+    A connection that stalls or is reset raises PairingError, like every other failed attempt: an OSError here
+    would read as "this pairing route is broken" and stop the dialog from listening."""
+    try:
+        return _pairing_exchange(conn, pending, lan_ip, lan_port, cert_fingerprint, confirm, cancel)
+    except OSError as exc:
+        raise PairingError(f"the connection to the phone failed ({exc})") from exc
+
+
+def _pairing_exchange(
+    conn: socket.socket, pending: PendingPairing, lan_ip: str, lan_port: int, cert_fingerprint: str,
+    confirm: ConfirmFn, cancel: threading.Event | None,
+) -> PairedDevice:
     nonce = crypto.gen_nonce()
     # PC speaks first (the "offer") — see PROTOCOL.md section 1. The PIN is never sent.
     _send_line(conn, pending.offer_json(nonce))
@@ -120,13 +148,14 @@ def run_pairing_handshake(
         raise PairingError(f"you declined {phone_name}")
 
     device = pending.complete(session, phone_name, str(phone_hello.get("platform", "android")))
-    _send_line(conn, {"ok": True, "name": pending.pc_name})
-
-    cipher = crypto.SessionCipher(device.session_key, role="pc")
-    _send_encrypted_frame(conn, cipher, pending.lan_info_message(lan_ip, lan_port, cert_fingerprint))
     # The phone answers with its Ed25519 identity public key (encrypted under the new pairing key). Without it
-    # the pairing is unusable (v4 connections need a signature), so a failure here aborts and forgets the pairing.
+    # the pairing is unusable (v4 connections need a signature), so any failure from here on - including a connection
+    # that drops before the phone has everything - aborts and forgets the pairing.
     try:
+        _send_line(conn, {"ok": True, "name": pending.pc_name})
+        cipher = crypto.SessionCipher(device.session_key, role="pc")
+        _send_encrypted_frame(conn, cipher, pending.lan_info_message(lan_ip, lan_port, cert_fingerprint))
+        _await_phone(conn, cancel)
         identity = _recv_encrypted_frame(conn, cipher)
         import base64
 
@@ -138,6 +167,8 @@ def run_pairing_handshake(
         from .pairing import forget_device
 
         forget_device(device.fingerprint)
+        if isinstance(exc, (OSError, _NotConfirmed)):
+            raise   # a failed connection (reported as such by run_pairing_handshake) or no answer: not an outdated phone app
         raise PairingError(f"the phone didn't provide a valid identity key ({exc}); update PhoneBridge on the phone") from exc
     device.bt_addr = pending.bt_addr
     device.last_lan_ip = lan_ip
@@ -183,7 +214,7 @@ def accept_one_pairing(
         server.listen(1)
         conn = accept_until_cancelled(server, cancel)
         try:
-            return run_pairing_handshake(conn, pending, lan_ip, lan_port, cert_fingerprint, confirm)
+            return run_pairing_handshake(conn, pending, lan_ip, lan_port, cert_fingerprint, confirm, cancel)
         finally:
             conn.close()
     finally:

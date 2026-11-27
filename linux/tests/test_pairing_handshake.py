@@ -12,6 +12,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -142,6 +143,7 @@ def main() -> int:
           reloaded is not None and reloaded.session_key == dev.session_key and reloaded.allow_pc_control is False)
 
     print("1b. identity key is mandatory")
+    confirm_wait, bt.PHONE_CONFIRM_DEADLINE = bt.PHONE_CONFIRM_DEADLINE, 2   # the real wait covers the phone's user (4d)
     for mode, why in ((None, "a phone that sends no identity key"), ("short", "an invalid identity key")):
         pcx = pairing.PendingPairing(bt_addr=None, pc_name="PC")
         before = {d.fingerprint for d in pairing.PairedDevice.list_all()}
@@ -149,6 +151,7 @@ def main() -> int:
         check(f"{why} aborts pairing and leaves nothing behind",
               isinstance(outx.get("error"), pairing.PairingError)
               and not ({d.fingerprint for d in pairing.PairedDevice.list_all()} - before))
+    bt.PHONE_CONFIRM_DEADLINE = confirm_wait
 
     print("2. wrong PIN is refused, counted, and locks the dialog out")
     pc2 = pairing.PendingPairing(bt_addr=None, pc_name="PC")
@@ -189,6 +192,115 @@ def main() -> int:
     check("a fresh code reports its remaining life", 58 <= pc7.seconds_left() <= 60 and not pc7.is_spent())
     pc7.created_at -= 61
     check("after 60 s the code is spent", pc7.is_spent() and pc7.seconds_left() == 0)
+
+    print("4c. a broken connection is a failed attempt, not a broken pairing route")
+
+    class Broken:
+        """A socket whose peer goes away: fails at the `fail_at`-th send, or at the first read."""
+
+        def __init__(self, real, fail_at=None, error=ConnectionResetError):
+            self.real, self.fail_at, self.error, self.sends = real, fail_at, error, 0
+
+        def sendall(self, data):
+            self.sends += 1
+            if self.sends == self.fail_at:
+                raise self.error("gone")
+            return self.real.sendall(data)
+
+        def recv(self, n):
+            if self.fail_at is None:
+                raise self.error("gone")
+            return self.real.recv(n)
+
+    for error in (ConnectionResetError, socket.timeout):
+        a, b = socket.socketpair()
+        try:
+            bt.run_pairing_handshake(Broken(a, error=error), pairing.PendingPairing(bt_addr=None, pc_name="PC"),
+                                     "192.168.1.5", 28100, "ab" * 32, lambda *_: True)
+            caught = None
+        except Exception as exc:  # noqa: BLE001
+            caught = exc
+        a.close()
+        b.close()
+        check(f"{error.__name__} before the phone answers raises PairingError, not OSError",
+              isinstance(caught, pairing.PairingError) and not isinstance(caught, OSError))
+
+    # Drop the connection exactly when the PC sends "ok" (4th send) and the LAN info (5th), after the pairing was saved.
+    real_exchange = bt.run_pairing_handshake
+    for fail_at, what in ((4, "the 'allowed' reply"), (5, "the connection details")):
+        pcd = pairing.PendingPairing(bt_addr=None, pc_name="PC")
+        before = {d.fingerprint for d in pairing.PairedDevice.list_all()}
+        bt.run_pairing_handshake = lambda conn, *a: real_exchange(Broken(conn, fail_at=fail_at, error=BrokenPipeError), *a)
+        try:
+            outd, _viewd = run_handshake(pcd, pcd.token)
+        finally:
+            bt.run_pairing_handshake = real_exchange
+        check(f"a connection lost while sending {what} leaves no half-made pairing",
+              isinstance(outd.get("error"), pairing.PairingError) and "connection" in str(outd["error"])
+              and not ({d.fingerprint for d in pairing.PairedDevice.list_all()} - before))
+
+    print("4d. the phone's user takes a while to compare the code")
+    real_deadline = bt.PHONE_CONFIRM_DEADLINE
+    check("the PC waits longer than the phone app's 3-minute confirmation", bt.PHONE_CONFIRM_DEADLINE > 180)
+
+    def exchange(confirm_after: float | None, cancel=None, read_limit=10.0):
+        """Pairs over a socket pair with a phone that sends its identity key `confirm_after` seconds late (None: never)."""
+        pend = pairing.PendingPairing(bt_addr=None, pc_name="PC")
+        before = {d.fingerprint for d in pairing.PairedDevice.list_all()}
+        a, b = socket.socketpair()
+        a.settimeout(read_limit)
+        b.settimeout(10)
+        res = {}
+
+        def pc_side():
+            try:
+                res["device"] = bt.run_pairing_handshake(a, pend, "192.168.1.5", 28100, "ab" * 32, lambda *_: True, cancel)
+            except Exception as exc:  # noqa: BLE001
+                res["error"] = exc
+
+        t = threading.Thread(target=pc_side, daemon=True)
+        t.start()
+        offer = bt._recv_line(b)
+        kp = crypto.Keypair.generate()
+        ctx = "|".join(["phonebridge-pair-v4", offer["pub"], kp.public_b64(), offer["nonce"]]).encode()
+        pake = spake2.Spake2("A", pend.token, ctx)
+        bt._send_line(b, {"v": 4, "pub": kp.public_b64(), "name": "Slow", "spake": base64.b64encode(pake.share).decode()})
+        keys = pake.finish(base64.b64decode(bt._recv_line(b)["spake"]))
+        bt._send_line(b, {"confirm": keys.mac_phone.hex()})
+        bt._recv_line(b)
+        bt._recv_line(b)
+        cipher = crypto.SessionCipher(crypto.derive_session_key_v4(kp.private, crypto.public_from_b64(offer["pub"]), keys.ke))
+        n = crypto.unpack_frame_len(b.recv(4))
+        got = b""
+        while len(got) < n:
+            got += b.recv(n - len(got))
+        if confirm_after is not None:
+            time.sleep(confirm_after)
+            from phonebridge import secure_session
+            ident = secure_session.Identity.generate()
+            b.sendall(crypto.pack_frame(cipher.encrypt(json.dumps({"id_pub": ident.public_b64}).encode())))
+        t.join(8)
+        a.close()
+        b.close()
+        res["running"] = t.is_alive()
+        res["new"] = {d.fingerprint for d in pairing.PairedDevice.list_all()} - before
+        return res
+
+    bt.PHONE_CONFIRM_DEADLINE = 6
+    res = exchange(1.5, read_limit=0.7)   # longer than a single message may take
+    check("a confirmation that takes longer than an ordinary message still pairs",
+          res.get("device") is not None and len(res["new"]) == 1)
+    bt.PHONE_CONFIRM_DEADLINE = 0.5
+    res = exchange(None)
+    check("no confirmation: the pairing is abandoned and nothing is left",
+          "not confirmed" in str(res.get("error")) and not res["running"] and not res["new"])
+    bt.PHONE_CONFIRM_DEADLINE = 60
+    closed = threading.Event()
+    threading.Timer(1.0, closed.set).start()
+    res = exchange(None, cancel=closed)
+    check("closing the Pair dialog ends the wait at once",
+          "closed on the PC" in str(res.get("error")) and not res["running"] and not res["new"])
+    bt.PHONE_CONFIRM_DEADLINE = real_deadline
 
     print("5. frames")
     c = crypto.SessionCipher(phone_key)
