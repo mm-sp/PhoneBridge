@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+FAIL_TAIL = 30  # lines of a failing file's output that are shown under its summary line
 py = sys.argv[1] if len(sys.argv) > 1 else sys.executable
 total_pass = total_fail = 0
 bad = []
@@ -40,5 +41,8 @@ for t in sorted(HERE.glob("test_*.py")):
     if status == "FAIL":
         bad.append(t.name)
     print(f"{status:4} {t.name:34} {p:4} passed {f} failed")
+    if status == "FAIL":  # without this a crash in the full run says nothing about why
+        for line in out.strip().splitlines()[-FAIL_TAIL:]:
+            print(f"     | {line}")
 print(f"\nTOTAL {total_pass} checks passed, {total_fail} failed" + (f"  FAILING FILES: {', '.join(bad)}" if bad else ""))
 sys.exit(1 if bad else 0)
