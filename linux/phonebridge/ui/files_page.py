@@ -46,6 +46,7 @@ class FilesPage(Gtk.Box, LoadingMixin):
         self._open_when_saved: set[str] = set()
         self._transfer_rows: dict[str, tuple[Adw.ActionRow, Gtk.ProgressBar]] = {}
         self._cancel_buttons: dict[str, Gtk.Button] = {}
+        self._cancel_handlers: dict[str, int] = {}
         self._sent_rows: dict[str, str] = {}   # PC->phone transfer id -> row key
 
         self._stack = Adw.ViewStack(vexpand=True)
@@ -109,6 +110,21 @@ class FilesPage(Gtk.Box, LoadingMixin):
     def reset(self) -> None:
         self._loaded = False
 
+    def forget_phone(self) -> None:
+        """Another phone takes over: back to the top of its storage. The transfer list stays (it is this PC's history)."""
+        self._path = "/"
+        self._loaded = False
+        self._open_when_saved.clear()
+        self._clear_listing()
+        self._path_label.set_label("Phone")
+        self._free_label.set_label("")
+        self._placeholder.set_label("Nothing loaded from this phone yet")
+
+    def _clear_listing(self) -> None:
+        # Rows only: get_first_child() also returns the placeholder, and removing that loses the "empty" and error texts.
+        while (row := self._file_list.get_row_at_index(0)) is not None:
+            self._file_list.remove(row)
+
     def navigate(self, path: str) -> None:
         self._path = path or "/"
         self._path_label.set_label(f"Phone{self._path if self._path != '/' else ''}")
@@ -117,8 +133,7 @@ class FilesPage(Gtk.Box, LoadingMixin):
 
     def after_refusal(self, _what: str) -> None:
         self._loaded = False
-        while (child := self._file_list.get_first_child()) is not None:
-            self._file_list.remove(child)   # the entries shown belong to another folder than the path above them
+        self._clear_listing()   # the entries shown belong to another folder than the path above them
         self._placeholder.set_label("Browsing the phone's files isn't allowed (see the note above)")
 
     def download_refused(self, phone_path: str | None, message: str) -> None:
@@ -141,8 +156,7 @@ class FilesPage(Gtk.Box, LoadingMixin):
         self._loaded = True
         self._path = path
         self._path_label.set_label(f"Phone{self._path if self._path != '/' else ''}")
-        while (child := self._file_list.get_first_child()) is not None:
-            self._file_list.remove(child)
+        self._clear_listing()
         self._placeholder.set_label(payload.get("error") or "This folder is empty")
         for e in payload.get("entries", []):
             name = e.get("name", "")
@@ -234,7 +248,10 @@ class FilesPage(Gtk.Box, LoadingMixin):
             btn.set_visible(False)
             self._update_transfer(key, "Cancelled", None)
 
-        btn.connect("clicked", clicked)
+        previous = self._cancel_handlers.pop(key, None)
+        if previous is not None:
+            btn.disconnect(previous)   # the row is used again: Cancel is for the new transfer only
+        self._cancel_handlers[key] = btn.connect("clicked", clicked)
         btn.set_visible(True)
 
     def _update_transfer(self, key: str, subtitle: str | None = None, fraction: float | None = None) -> bool:
@@ -262,11 +279,11 @@ class FilesPage(Gtk.Box, LoadingMixin):
         self._transfer_row(key, payload.get("filename", dest_path.name), "", incoming=True)
         self._update_transfer(key, f"Saved to {dest_path}", 1.0)
         row = self._transfer_rows[key][0]
-        if not getattr(row, "_has_open", False):
-            row._has_open = True
+        if getattr(row, "_saved_path", None) is None:
             open_btn = Gtk.Button(label="Open", valign=Gtk.Align.CENTER)
-            open_btn.connect("clicked", lambda _b: Gio.AppInfo.launch_default_for_uri(dest_path.as_uri(), None))
+            open_btn.connect("clicked", lambda _b, r=row: Gio.AppInfo.launch_default_for_uri(r._saved_path.as_uri(), None))
             row.add_suffix(open_btn)
+        row._saved_path = dest_path   # downloading a file again saves a new copy: "Open" means the latest one
         src = payload.get("source_path")
         if src in self._open_when_saved:
             self._open_when_saved.discard(src)
@@ -276,6 +293,13 @@ class FilesPage(Gtk.Box, LoadingMixin):
                 Gio.AppInfo.launch_default_for_uri(dest_path.as_uri(), None)
             else:
                 self._update_transfer(key, f"Saved to {dest_path} (not opened automatically: click Open)", 1.0)
+
+    def on_receive_failed(self, payload: dict, reason: str) -> None:
+        """A file from the phone won't arrive: its row must not stay "Requesting" or "Receiving"."""
+        key = self._key_for_incoming(payload)
+        self._open_when_saved.discard(payload.get("source_path"))
+        self._transfer_row(key, payload.get("filename", "file"), "", incoming=True)
+        self._update_transfer(key, "Cancelled" if reason == "cancelled" else f"Failed: {reason}", None)
 
     @staticmethod
     def _key_for_incoming(payload: dict) -> str:

@@ -27,6 +27,8 @@ def _pretty_fp(fp: str) -> str:
 
 
 class SecurityPage(Gtk.ScrolledWindow):
+    works_offline = True   # paired devices, permissions and the event log are this PC's own
+
     def __init__(self, server, net_thread, on_toast=None, on_revoked=None) -> None:
         super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER)
         self._server, self._net, self._toast, self._on_revoked = server, net_thread, on_toast or (lambda _m: None), on_revoked

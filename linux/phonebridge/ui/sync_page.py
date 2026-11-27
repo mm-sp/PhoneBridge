@@ -26,6 +26,8 @@ _DISPLAY_TEXT = {"on": "On", "off": "Off (powered down)", "dimmed": "Dimmed (not
 
 
 class SyncPage(Gtk.ScrolledWindow):
+    works_offline = True   # settings and the "not connected" state make sense without a phone
+
     def __init__(self, controller, on_save_settings, probe_display=None) -> None:
         super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER)
         self._ctl, self._save, self._probe = controller, on_save_settings, probe_display

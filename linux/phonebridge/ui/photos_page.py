@@ -71,9 +71,20 @@ class PhotosPage(Gtk.Box, LoadingMixin):
         self._spinner.set_visible(False)
         self._open_when_saved.clear()
 
-    def reload(self) -> None:
+    def forget_phone(self) -> None:
+        """Another phone takes over: nothing of the previous one's stays."""
+        self.reset()
+        self._clear_tiles()
+        self._count.set_label("Photos")
+        self._more_btn.set_visible(False)
+        self._status_row.set_label("")
+
+    def _clear_tiles(self) -> None:
         while (child := self._flow.get_first_child()) is not None:
             self._flow.remove(child)
+
+    def reload(self) -> None:
+        self._clear_tiles()
         self._loaded = 0
         self._total = 0
         self._loading = False
@@ -95,6 +106,10 @@ class PhotosPage(Gtk.Box, LoadingMixin):
     def download_refused(self, message: str) -> None:
         self._open_when_saved.clear()
         self._status_row.set_label(message)
+
+    def download_failed(self, photo_id: str, reason: str) -> None:
+        self._open_when_saved.discard(photo_id)
+        self._status_row.set_label(f"Download failed: {reason}")
 
     def set_photos(self, payload: dict) -> None:
         if payload.get("offset", 0) != self._loaded:

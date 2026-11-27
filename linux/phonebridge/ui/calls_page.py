@@ -219,15 +219,36 @@ class CallsPage(Gtk.Box, LoadingMixin):
             if not self._n_calls:
                 self._loaded = False
 
+    def forget_phone(self) -> None:
+        """Another phone takes over: the previous one's call history, contacts and typed number go."""
+        self._loaded = False
+        self._clear_history()
+        self._clear_contacts()
+        self._number.set_text("")
+        self._contact_search.set_text("")
+        self._contact_search.set_placeholder_text("Search contacts")
+        self._recent_count.set_label("")
+        self._more_calls_btn.set_visible(False)
+        self._more_contacts_btn.set_visible(False)
+
+    def _clear_history(self) -> None:
+        # (get_first_child() would also return the list's placeholder, so walk the rows)
+        while (row := self._recent_list.get_row_at_index(0)) is not None:
+            self._recent_list.remove(row)
+        self._n_calls = 0
+        self._n_missed = 0
+
+    def _clear_contacts(self) -> None:
+        self._contacts = []
+        while (row := self._contact_list.get_row_at_index(0)) is not None:
+            self._contact_list.remove(row)
+
     def set_history(self, payload: dict) -> None:
         """A page of the call log: offset 0 replaces, later pages append."""
         self._loaded = True
         calls = payload.get("calls", [])
         if not payload.get("offset"):
-            while (child := self._recent_list.get_first_child()) is not None:
-                self._recent_list.remove(child)
-            self._n_calls = 0
-            self._n_missed = 0
+            self._clear_history()
         self._n_calls += len(calls)
         missed = 0
         for c in calls:
@@ -257,9 +278,7 @@ class CallsPage(Gtk.Box, LoadingMixin):
         """A page of contacts (A-Z): offset 0 replaces, later pages append."""
         contacts = payload.get("contacts", [])
         if not payload.get("offset"):
-            self._contacts = []
-            while (child := self._contact_list.get_first_child()) is not None:
-                self._contact_list.remove(child)
+            self._clear_contacts()
         self._contacts = self._contacts + contacts
         self._more_contacts_btn.set_visible(bool(payload.get("has_more")))
         self._more_contacts_btn.set_sensitive(True)

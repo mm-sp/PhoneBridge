@@ -236,7 +236,10 @@ class PhoneBridgeApp(Adw.Application):
         def on_done(dest_path: Path, _size: int, payload: dict) -> None:
             GLib.idle_add(win.on_file_received, payload, dest_path)
 
-        file_transfer.register(self.server, dest_dir_for, progress_for, on_done)
+        def on_failed(payload: dict, reason: str) -> None:
+            GLib.idle_add(win.on_file_failed, payload, reason)
+
+        file_transfer.register(self.server, dest_dir_for, progress_for, on_done, on_failed)
 
 
 # Phone -> PC message types routed to MainWindow.on_phone_message (see PROTOCOL.md section 4).

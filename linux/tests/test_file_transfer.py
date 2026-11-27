@@ -131,7 +131,9 @@ async def main_async() -> int:
 
     received_files: list = []
     dest_pc = work / "pc_inbox"
-    file_transfer.register(server, lambda _p: dest_pc, None, lambda path, size, p: received_files.append(path))
+    failures: list = []
+    file_transfer.register(server, lambda _p: dest_pc, None, lambda path, size, p: received_files.append(path),
+                           lambda p, reason: failures.append((p.get("filename"), reason)))
 
     phone = FakePhone(port, device.fingerprint, session_key, ident, server.cert_fingerprint)
     await phone.connect()
@@ -331,6 +333,154 @@ async def main_async() -> int:
     for evil in ("../../escape.txt", "/etc/passwd", "..", ".", "a/../../b", "x\\..\\y"):
         dest = file_transfer._unique_dest(dest_pc, evil)  # noqa: SLF001
         check(f"filename {evil!r} stays inside the download folder", dest.parent == dest_pc and dest.name not in ("", ".", ".."))
+
+    print("7e. every incoming file that won't arrive is reported, once, with a reason")
+    check("a damaged upload was reported", [r for n, r in failures if n == "bad.bin"] == ["checksum mismatch"])
+    check("a cancelled upload was reported as cancelled", [r for n, r in failures if n == "cancelled.bin"] == ["cancelled"])
+    check("a saved upload was not reported as failed", not [n for n, _r in failures if n == "up.bin"])
+
+    async def offer_up(name: str, size: int) -> str:
+        tid_x = hashlib.sha256(name.encode()).hexdigest()[:32]
+        await phone.send("file.offer", {"transfer_id": tid_x, "filename": name, "size": size, "mime": "x/y",
+                                        "resume_key": tid_x[:12], "data_conn": True})
+        return tid_x
+
+    async def reason_for(name: str, wait: float = 5.0) -> list:
+        for _ in range(int(wait / 0.05)):
+            if any(n == name for n, _r in failures):
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.1)
+        return [r for n, r in failures if n == name]
+
+    await offer_up("huge.bin", 1 << 62)
+    answer = await asyncio.wait_for(phone.recv(), 5)
+    check("an upload refused for lack of space is reported", answer.type == "file.reject"
+          and await reason_for("huge.bin") == ["not enough free space on the PC"])
+
+    tid_l = await offer_up("lost.bin", CHUNK * 4)
+    await asyncio.wait_for(phone.recv(), 5)
+    r, w = await phone.data_connection(tid_l, 0)
+    w.write(phone.frame(os.urandom(CHUNK)))
+    await w.drain()
+    w.close()
+    check("a dropped data connection is reported in plain words",
+          await reason_for("lost.bin") == ["the connection to the phone was lost"])
+    check("…and the partial stays for a resume", any(dest_pc.glob(".pb-*.part")))
+
+    limits = file_transfer.OFFER_TIMEOUT, file_transfer.STALL_TIMEOUT
+    try:
+        file_transfer.OFFER_TIMEOUT, file_transfer.STALL_TIMEOUT = 0.6, 0.6
+        tid_s = await offer_up("stall.bin", CHUNK * 4)
+        await asyncio.wait_for(phone.recv(), 5)
+        r, w = await phone.data_connection(tid_s, 0)
+        w.write(phone.frame(os.urandom(CHUNK)))
+        await w.drain()
+        check("an upload that stops delivering ends", await reason_for("stall.bin") == ["the phone stopped sending"])
+        check("…and its data connection is closed", await asyncio.wait_for(r.read(), 5) == b"")
+        w.close()
+
+        tid_n = await offer_up("never.bin", 100)
+        await asyncio.wait_for(phone.recv(), 5)
+        check("an offer the phone never follows up ends", await reason_for("never.bin") == ["the phone didn't send the file"])
+        check("…and is forgotten", tid_n not in file_transfer._IN)  # noqa: SLF001
+
+        slow = os.urandom(8 * 1000)
+        tid_w = await offer_up("slow.bin", len(slow))
+        await asyncio.wait_for(phone.recv(), 5)
+        r, w = await phone.data_connection(tid_w, 0)
+        for i in range(0, len(slow), 1000):   # 1.6 s in all: longer than either limit, never silent for that long
+            await asyncio.sleep(0.2)
+            w.write(phone.frame(slow[i:i + 1000]))
+            await w.drain()
+        w.write(phone.frame(b"SHA256:" + hashlib.sha256(slow).hexdigest().encode()))
+        await w.drain()
+        verdict = await asyncio.wait_for(phone.read_frame(r), 5)
+        w.close()
+        await asyncio.sleep(0.3)
+        check("a slow but steady upload outlasts the limits and is saved", verdict == b"OK"
+              and bool(received_files) and received_files[-1].name == "slow.bin" and not await reason_for("slow.bin", 0.1))
+    finally:
+        file_transfer.OFFER_TIMEOUT, file_transfer.STALL_TIMEOUT = limits
+
+    print("7f. the same file sent twice at once never shares a partial")
+    twice = os.urandom(CHUNK * 4)
+
+    async def offer_same(tid_x: str, name: str) -> None:
+        await phone.send("file.offer", {"transfer_id": tid_x, "filename": name, "size": len(twice), "mime": "x/y",
+                                        "resume_key": "samekey", "data_conn": True})
+
+    async def upload(r, w, from_byte: int, to_byte: int | None = None) -> None:
+        for i in range(from_byte, len(twice) if to_byte is None else to_byte, CHUNK):
+            w.write(phone.frame(twice[i:i + CHUNK]))
+        if to_byte is None:
+            w.write(phone.frame(b"SHA256:" + hashlib.sha256(twice).hexdigest().encode()))
+        await w.drain()
+
+    await offer_same("w" * 32, "twice.bin")
+    first_answer = await asyncio.wait_for(phone.recv(), 5)
+    r1, w1 = await phone.data_connection("w" * 32, first_answer.payload["offset"])
+    cipher1 = phone.dcipher
+    await upload(r1, w1, 0, CHUNK * 3)
+    await asyncio.sleep(0.4)
+    await offer_same("x" * 32, "twice.bin")
+    second_answer = await asyncio.wait_for(phone.recv(), 5)
+    check("the second transfer starts from nothing, in its own partial", second_answer.payload["offset"] == 0)
+    r2, w2 = await phone.data_connection("x" * 32, 0)
+    cipher2 = phone.dcipher
+    await upload(r2, w2, 0, CHUNK)   # the second has written only its start when the first finishes
+    await asyncio.sleep(0.4)
+    phone.dcipher = cipher1
+    await upload(r1, w1, CHUNK * 3)
+    verdict_1 = await asyncio.wait_for(phone.read_frame(r1), 5)
+    await asyncio.sleep(0.3)
+    saved_1 = (dest_pc / "twice.bin").read_bytes()
+    phone.dcipher = cipher2
+    await upload(r2, w2, CHUNK)
+    verdict_2 = await asyncio.wait_for(phone.read_frame(r2), 5)
+    w1.close()
+    w2.close()
+    await asyncio.sleep(0.3)
+    check("the first file is whole as soon as it is reported saved", verdict_1 == b"OK" and saved_1 == twice)
+    check("…and so is the second, under its own name", verdict_2 == b"OK"
+          and (dest_pc / "twice (1).bin").read_bytes() == twice)
+
+    await offer_same("y" * 32, "again.bin")
+    await asyncio.wait_for(phone.recv(), 5)
+    r1, w1 = await phone.data_connection("y" * 32, 0)
+    await upload(r1, w1, 0, CHUNK * 2)
+    await asyncio.sleep(0.4)
+    await offer_same("z" * 32, "again.bin")
+    await asyncio.wait_for(phone.recv(), 5)
+    r2, w2 = await phone.data_connection("z" * 32, 0)
+    await upload(r2, w2, 0, CHUNK)
+    await asyncio.sleep(0.4)
+    extra = list(dest_pc.glob(".pb-samekey-*.part"))
+    w2.close()
+    await asyncio.sleep(0.4)
+    check("a second transfer that fails leaves no partial nothing would resume", len(extra) == 1 and not extra[0].exists())
+    check("…while the first keeps its own", (dest_pc / ".pb-samekey.part").stat().st_size == CHUNK * 2)
+
+    # The link is replaced while the first still hangs: the retry takes over the partial and resumes it.
+    await phone.w.drain()
+    phone.w.close()
+    await asyncio.sleep(0.3)
+    await phone.connect()
+    await asyncio.sleep(0.3)
+    old_r = r1
+    await offer_same("q" * 32, "again.bin")
+    retry_answer = await asyncio.wait_for(phone.recv(), 5)
+    check("a retry after a reconnect resumes where the stuck transfer got to", retry_answer.payload["offset"] == CHUNK * 2)
+    check("…and the stuck one is ended", await asyncio.wait_for(old_r.read(), 5) == b""
+          and "y" * 32 not in file_transfer._IN)  # noqa: SLF001
+    r2, w2 = await phone.data_connection("q" * 32, CHUNK * 2)
+    await upload(r2, w2, CHUNK * 2)
+    verdict = await asyncio.wait_for(phone.read_frame(r2), 5)
+    w2.close()
+    w1.close()
+    await asyncio.sleep(0.3)
+    check("…then completes intact", verdict == b"OK" and (dest_pc / "again.bin").read_bytes() == twice)
+    conn = server.get_connection(device.fingerprint)
 
     print("8. data connection without the key is dropped")
     r, w = await open_tls(port)

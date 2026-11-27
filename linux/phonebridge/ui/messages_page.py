@@ -139,6 +139,34 @@ class MessagesPage(Gtk.Box, LoadingMixin):
     def mark_requested(self) -> None:
         self._loaded = True
 
+    def forget_phone(self) -> None:
+        """Another phone takes over: the previous one's conversations, open thread and half-written message go, so a
+        reply meant for its contacts can't be sent from this one."""
+        self._loaded = False
+        self._clear_thread_rows()
+        self._local_mms.clear()
+        self._thread_msgs = []
+        self._thread_has_more = False
+        self._active_thread_id = None
+        self._active_address = ""
+        for child in list(self._messages_box):
+            self._messages_box.remove(child)
+        self._title.set_label("Select a conversation")
+        self._subtitle.set_label("")
+        self._to_entry.set_text("")
+        self._to_entry.set_visible(False)
+        self._entry.set_text("")
+        self._set_attachments([])
+        self._search.set_text("")
+        self._count_label.set_label("")
+        self._more_threads_btn.set_visible(False)
+
+    def _clear_thread_rows(self) -> None:
+        for row in list(self._rows.values()):
+            self._thread_list.remove(row)
+        self._rows.clear()
+        self._threads.clear()
+
     def after_refusal(self, what: str) -> None:
         if what == "sms.threads":
             self._loaded = bool(self._rows)   # nothing to show: ask again the next time the tab is opened
@@ -166,10 +194,7 @@ class MessagesPage(Gtk.Box, LoadingMixin):
         """A page of conversations: offset 0 replaces the list, later pages append."""
         self._loaded = True
         if not payload.get("offset"):
-            for row in list(self._rows.values()):
-                self._thread_list.remove(row)
-            self._rows.clear()
-            self._threads.clear()
+            self._clear_thread_rows()
         for thread in payload.get("threads", []):
             if str(thread.get("id")) not in self._rows:
                 self._add_thread_row(thread)

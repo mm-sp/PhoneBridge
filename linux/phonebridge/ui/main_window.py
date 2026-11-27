@@ -279,10 +279,10 @@ class MainWindow(Adw.ApplicationWindow):
         self._stack.set_visible_child_name(key)
         title = next(t for k, t, _i in SECTIONS if k == key)
         self._content_title.set_title(title)
-        if self._connected:
-            page = self._pages[key]
-            if hasattr(page, "on_shown"):
-                page.on_shown()
+        page = self._pages[key]
+        # Pages that show this PC's own state (works_offline) are brought up to date with or without a phone.
+        if hasattr(page, "on_shown") and (self._connected or getattr(page, "works_offline", False)):
+            page.on_shown()
 
     def _open_pairing(self) -> None:
         connected = self._fingerprint()
@@ -468,6 +468,8 @@ class MainWindow(Adw.ApplicationWindow):
                 self._set_active_phone(others[0])
         self._refresh_phone_selector()
         self._sync.on_link_change(self._fingerprint() is not None)
+        if self._current_key == "security":
+            self._security_page.refresh()   # it names who is connected: don't leave that on screen once it changes
 
     def _video_transport(self) -> str | None:
         return self._server.video_transport.get(self._fingerprint() or "")
@@ -503,6 +505,8 @@ class MainWindow(Adw.ApplicationWindow):
         for page in self._pages.values():
             if hasattr(page, "reset"):
                 page.reset()
+            if switching and hasattr(page, "forget_phone"):
+                page.forget_phone()   # one phone's data must not be shown, or answered, as another's
         # Cheap things load straight away; heavy pages load when opened.
         if not self._is_ios(fingerprint):
             self._send("notifications.sync", {})
@@ -800,6 +804,14 @@ class MainWindow(Adw.ApplicationWindow):
             self._files_page.on_file_received(payload, dest_path)
             if not payload.get("source_path"):
                 self.toast(f"Received {dest_path.name} from phone")
+
+    def on_file_failed(self, payload: dict, reason: str) -> None:
+        if payload.get("photo_id"):
+            self._photos_page.download_failed(str(payload["photo_id"]), reason)
+        else:
+            self._files_page.on_receive_failed(payload, reason)
+            if reason != "cancelled" and not payload.get("source_path"):
+                self.toast(f"A file from the phone didn't arrive: {reason}")
 
     # ---------------------------------------------------------------- actions
 

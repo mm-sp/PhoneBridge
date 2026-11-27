@@ -34,6 +34,7 @@ log = logging.getLogger("phonebridge.file_transfer")
 
 CHUNK_SIZE = 256 * 1024
 OFFER_TIMEOUT = 120  # seconds the receiver has to answer / connect
+STALL_TIMEOUT = 120  # an incoming transfer that delivers nothing for this long is over
 AUTH_PREFIX = b"PBFILE:"
 HASH_PREFIX = b"SHA256:"
 
@@ -64,6 +65,7 @@ class _Inbound:
     on_progress: object = None
     cancelled: bool = False
     writer: object = None
+    session_id: str | None = None   # the control session the offer arrived on
     done: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
 
 
@@ -146,6 +148,23 @@ def resume_key(path: Path) -> str:
 
 def _safe_key(key: str) -> str:
     return "".join(ch for ch in key if ch.isalnum())[:40]
+
+
+def _claim_part(dest_dir: Path, key: str, tid: str, session_id: str | None) -> tuple[Path, bool]:
+    """(partial file, may a later attempt resume it) for a new incoming transfer. Two transfers must never write one
+    partial: each checks only the bytes it received, so the mix would be saved as a good file."""
+    part = dest_dir / f".pb-{key}.part"
+    for other in list(_IN.values()):
+        if other.part_path != part or other.done.done():
+            continue
+        if other.session_id == session_id:   # the same file twice at once: the second gets a partial of its own
+            return dest_dir / f".pb-{key}-{_safe_key(tid)}.part", False
+        # Left over from a link that has since been replaced: this is the retry, so end the old one and resume.
+        other.cancelled = True
+        if other.writer is not None:
+            other.writer.close()
+        other.done.set_exception(TransferError("the connection to the phone was lost"))
+    return part, True
 
 
 async def _read_frame(reader: asyncio.StreamReader, cipher: crypto.SessionCipher) -> bytes:
@@ -234,47 +253,73 @@ def _unique_dest(dest_dir: Path, name: str) -> Path:
     return dest
 
 
-async def accept_offer(conn: DeviceConnection, envelope, dest_dir: Path, on_progress=None, on_done=None) -> None:
+async def accept_offer(conn: DeviceConnection, envelope, dest_dir: Path, on_progress=None, on_done=None,
+                       on_failed=None) -> None:
     """Handler body for an incoming file.offer: checks space, picks the resume offset, answers
-    file.accept/file.reject and then (in a background task) waits for the data connection."""
+    file.accept/file.reject and then (in a background task) waits for the data connection.
+    Ends in exactly one of on_done(path, size, payload) and on_failed(payload, reason)."""
     p = envelope.payload
     tid = str(p.get("transfer_id", ""))
     size = int(p.get("size", 0))
+
+    def failed(reason: str) -> None:
+        _fail_fetch(p, reason)
+        if on_failed:
+            on_failed(p, reason)
+
     if not p.get("data_conn") or not tid or size < 0:
-        _fail_fetch(p, "unsupported transfer; update PhoneBridge")
+        failed("unsupported transfer; update PhoneBridge")
         await conn.send("control", "file.reject", {"transfer_id": tid, "reason": "unsupported transfer; update PhoneBridge"})
         return
     dest_dir.mkdir(parents=True, exist_ok=True)
     purge_stale_partials(dest_dir)
-    key = _safe_key(str(p.get("resume_key", ""))) or tid
-    part = dest_dir / f".pb-{key}.part"
+    key = _safe_key(str(p.get("resume_key", ""))) or _safe_key(tid)
+    session_id = getattr(conn, "session_id", None)
+    part, resumable = _claim_part(dest_dir, key, tid, session_id)
     offset = part.stat().st_size if part.exists() else 0
     if offset >= size:  # stale/complete leftovers: start over
         part.unlink(missing_ok=True)
         offset = 0
     if shutil.disk_usage(dest_dir).free < (size - offset) + (64 << 20):
-        _fail_fetch(p, "not enough free space on the PC")
+        failed("not enough free space on the PC")
         await conn.send("control", "file.reject", {"transfer_id": tid, "reason": "not enough free space on the PC"})
         return
     inb = _Inbound(payload=p, device_fp=conn.fingerprint, dest_dir=dest_dir, part_path=part, offset=offset,
-                   on_progress=on_progress)
+                   on_progress=on_progress, session_id=session_id)
     _IN[tid] = inb
     await conn.send("control", "file.accept", {"transfer_id": tid, "offset": offset})
 
     async def finish() -> None:
         try:
-            dest = await asyncio.wait_for(asyncio.shield(inb.done), OFFER_TIMEOUT * 30)
+            # The limit is for the data connection to show up. A running transfer may take as long as it keeps
+            # delivering (STALL_TIMEOUT in _stream_inbound ends one that doesn't).
+            await asyncio.wait({inb.done}, timeout=OFFER_TIMEOUT)
+            if not inb.done.done() and inb.writer is None:
+                raise TransferError("the phone didn't send the file")
+            dest = await inb.done
             _audit(conn, "in", size, True)
             if on_done:
                 on_done(dest, size, p)
         except Exception as exc:  # noqa: BLE001
             _audit(conn, "in", size, False, str(exc))
             log.warning("incoming transfer %s failed: %s", p.get("filename"), exc)
-            _fail_fetch(p, str(exc) or "transfer failed")
+            if not resumable:
+                part.unlink(missing_ok=True)   # no later attempt would look for it
+            failed(str(exc) or "transfer failed")
         finally:
             _IN.pop(tid, None)
 
     spawn(finish())
+
+
+async def _read_incoming(reader: asyncio.StreamReader, cipher: crypto.SessionCipher) -> bytes:
+    """The next frame of an incoming file, with failures worded for the person waiting for it."""
+    try:
+        return await asyncio.wait_for(_read_frame(reader, cipher), STALL_TIMEOUT)
+    except asyncio.TimeoutError as exc:
+        raise TransferError("the phone stopped sending") from exc
+    except (asyncio.IncompleteReadError, ConnectionError) as exc:
+        raise TransferError("the connection to the phone was lost") from exc
 
 
 async def _stream_inbound(inb: _Inbound, reader, writer, cipher) -> None:
@@ -293,7 +338,7 @@ async def _stream_inbound(inb: _Inbound, reader, writer, cipher) -> None:
         f.seek(inb.offset)
         received = inb.offset
         while received < size:
-            chunk = await _read_frame(reader, cipher)
+            chunk = await _read_incoming(reader, cipher)
             if inb.cancelled:
                 raise TransferError("cancelled")
             if received + len(chunk) > size:
@@ -303,7 +348,7 @@ async def _stream_inbound(inb: _Inbound, reader, writer, cipher) -> None:
             received += len(chunk)
             if inb.on_progress:
                 inb.on_progress(received, size)
-        trailer = await _read_frame(reader, cipher)
+        trailer = await _read_incoming(reader, cipher)
     ok = trailer == HASH_PREFIX + digest.hexdigest().encode()
     await _write_frame(writer, cipher, b"OK" if ok else b"BAD")
     if not ok:
@@ -397,9 +442,10 @@ def _fail_fetch(payload: dict, reason: str) -> None:
         pending[1].set_exception(TransferError(reason))
 
 
-def register(server, dest_dir_for, on_progress_for=None, on_done=None) -> None:
+def register(server, dest_dir_for, on_progress_for=None, on_done=None, on_failed=None) -> None:
     """Wires file.offer / file.reject / file.cancel / permission.denied into a ControlChannelServer.
-    dest_dir_for(payload) -> Path; on_progress_for(payload) -> callable|None; on_done(path, size, payload)."""
+    dest_dir_for(payload) -> Path; on_progress_for(payload) -> callable|None; on_done(path, size, payload);
+    on_failed(payload, reason) for an incoming file that won't arrive."""
 
     def done(path, size, payload) -> None:
         pending = _FETCHES.pop(str(payload.get("source_path", "")), None)
@@ -416,7 +462,7 @@ def register(server, dest_dir_for, on_progress_for=None, on_done=None) -> None:
         routed = _FETCHES.get(str(payload.get("source_path", "")))
         await accept_offer(conn, envelope, routed[0] if routed else dest_dir_for(payload),
                            on_progress=None if routed else (on_progress_for(payload) if on_progress_for else None),
-                           on_done=done)
+                           on_done=done, on_failed=None if routed else on_failed)
 
     async def reject(conn, envelope) -> None:
         on_reject(conn, envelope)

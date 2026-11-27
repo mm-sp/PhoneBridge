@@ -76,10 +76,22 @@ class AppsPage(Gtk.Box, LoadingMixin):
     def after_refusal(self, _what: str) -> None:
         self._loaded = False   # ask again the next time the tab is opened
 
-    def set_apps(self, apps: list[dict]) -> None:
-        self._loaded = True
+    def forget_phone(self) -> None:
+        """Another phone takes over: the previous one's apps go."""
+        self._loaded = False
+        self._clear_tiles()
+        self._labels.clear()
+        self._search.set_text("")
+        self._count.set_label("Apps")
+        self._stack.set_visible_child_name("empty")
+
+    def _clear_tiles(self) -> None:
         while (child := self._flow.get_first_child()) is not None:
             self._flow.remove(child)
+
+    def set_apps(self, apps: list[dict]) -> None:
+        self._loaded = True
+        self._clear_tiles()
         for app in apps:
             self._flow.append(self._tile(app))
         self._count.set_label(f"Apps · {len(apps)}")

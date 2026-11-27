@@ -152,7 +152,13 @@ opens a **separate TLS connection per file** (the PC is always the server):
    (on `BAD` the partial file is discarded). Frames are capped at 8 MiB everywhere.
 5. The receiver saves `file.saved {transfer_id, filename, path}` (PC->phone).
 
-Several transfers can run at once and the control channel stays free while they do.
+Several transfers can run at once and the control channel stays free while they do. Two running transfers never write
+the same partial: a second offer with the same `resume_key` on the same control session gets a partial of its own
+(`offset` 0, not kept if it fails), while one from a newer session is a retry, which ends the old transfer and resumes.
+
+For an upload (phone->PC) the PC gives up, reports the file as failed and keeps any partial for a resume when no data
+connection arrives within 120 s of `file.accept`, or when a running one delivers nothing for 120 s. There is no limit
+on the length of a transfer that keeps delivering.
 
 ## 1d. Discovery
 
