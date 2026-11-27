@@ -518,26 +518,27 @@ def _boundary_problem(tests_dir: Path, src_dir: Path) -> str | None:
     return None
 
 
-def _harness_problem(h, tests_dir: Path, src_dir: Path, production_inodes: set) -> str | None:
-    """Why a harness path is not acceptable, or None. The path is RESOLVED first (symlinks followed), so a link inside
-    the tests directory that points at production code resolves outside it and is refused. The REAL Android production
-    directory is always excluded, whatever `src_dir` is; a hard link to a production file is refused by (device, inode)."""
+def _harness_problem(h, tests_dir: Path, src_dir: Path, production_inodes: set) -> tuple[Path | None, str | None]:
+    """The exact resolved path of a harness, or why it is refused. The path is RESOLVED first (symlinks followed), so a link
+    inside the tests directory that points at production code resolves outside it and is refused. The REAL Android
+    production directory is always excluded, whatever `src_dir` is; a hard link to a production file is refused by
+    (device, inode). The caller compiles the returned path, never a second resolution of `h`."""
     try:
         p = Path(h).resolve(strict=False)
         if not p.is_file():
-            return f"harness {p} does not exist or is not a file"
+            return None, f"harness {p} does not exist or is not a file"
         if p.suffix != ".kt":
-            return f"harness {p.name} is not a .kt file"
+            return None, f"harness {p.name} is not a .kt file"
         for root in (ANDROID_SRC.resolve(), src_dir.resolve()):
             if _inside(p, root):
-                return f"harness {p} is inside the Android production source directory {root}"
+                return None, f"harness {p} is inside the Android production source directory {root}"
         if not _inside(p, tests_dir.resolve()):
-            return f"harness {h} resolves to {p}, outside the tests directory {tests_dir.resolve()}"
+            return None, f"harness {h} resolves to {p}, outside the tests directory {tests_dir.resolve()}"
         if _inode_key(p) in production_inodes:
-            return f"harness {p} is a hard link to a production source file (same device and inode)"
+            return None, f"harness {p} is a hard link to a production source file (same device and inode)"
     except (ValueError, OSError, RuntimeError, TypeError) as exc:
-        return f"harness {h!r} cannot be checked ({type(exc).__name__}: {exc})"
-    return None
+        return None, f"harness {h!r} cannot be checked ({type(exc).__name__}: {exc})"
+    return p, None
 
 
 def _registered_problem(n: str, src_dir: Path, real_inodes: set) -> tuple[Path | None, str | None]:
@@ -591,6 +592,8 @@ def compile_pure(tc: Toolchain, names: list, out_dir, *, harness: list = (), bc:
             wrong.append(f"{label} must be None or a pathlib.Path, not {type(value).__name__}")
     if not isinstance(out_dir, (str, Path)):
         wrong.append(f"out_dir must be a str or pathlib.Path, not {type(out_dir).__name__}")
+    elif "\0" in str(out_dir):   # would make subprocess raise instead of returning a result
+        wrong.append("out_dir contains a NUL byte")
     if not isinstance(bc, bool):
         wrong.append(f"bc must be a bool, not {type(bc).__name__}")
     if not isinstance(names, (list, tuple)):
@@ -635,11 +638,11 @@ def compile_pure(tc: Toolchain, names: list, out_dir, *, harness: list = (), bc:
             srcs.append(path)
     if not why:
         for h in harness:
-            bad = _harness_problem(h, tests_dir, src_dir, production_inodes)
+            path, bad = _harness_problem(h, tests_dir, src_dir, production_inodes)
             if bad:
                 problems.append(bad)
             else:
-                srcs.append(Path(h).resolve())
+                srcs.append(path)
     for p in srcs:
         try:
             refs = android_references(p.read_text(encoding="utf-8"))

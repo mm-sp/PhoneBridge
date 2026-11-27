@@ -334,6 +334,34 @@ def main() -> int:
                 results = [K.compile_pure(tc, ["GoodPure.kt"], bad_out, **kw) for bad_out in (None, 5, b"out", ["x"])]
             check("out_dir of the wrong type (None, int, bytes, list) is refused with 97, no subprocess, nothing created in the working directory",
                   all(c.returncode == K.RUNNER_ERROR and "out_dir must be a str or pathlib.Path" in c.stderr for c in results) and not nc.calls and sorted(os.listdir(".")) == here)
+            with NoCompiler() as nc:
+                try:
+                    results = [K.compile_pure(tc, ["GoodPure.kt"], bad_out, **kw) for bad_out in ("a\0b", Path("a\0b"))]
+                except Exception as exc:  # noqa: BLE001 - the point is that nothing is raised
+                    results = []
+                    print("       raised", type(exc).__name__, exc)
+            check("out_dir with an embedded NUL byte (str or Path) is refused with 97, no exception, no subprocess",
+                  len(results) == 2 and all(c.returncode == K.RUNNER_ERROR and "NUL byte" in c.stderr for c in results) and not nc.calls)
+            harness = tdir / "Once.kt"
+            harness.write_text("fun main() {}\n")
+            compiled, asked = [], []
+            real_compile, real_resolve = K.compile, Path.resolve
+
+            def resolve_once(self, *a, **k):
+                if self == harness:
+                    asked.append(1)
+                    if len(asked) > 1:                       # a second look would see something else
+                        return tmp / "swapped" / "Evil.kt"
+                return real_resolve(self, *a, **k)
+
+            K.compile = lambda tc_, srcs, *a, **k: (compiled.extend(str(x) for x in srcs), K.Result(0, "", ""))[1]
+            Path.resolve = resolve_once
+            try:
+                c = K.compile_pure(tc, ["GoodPure.kt"], tmp / "once", harness=[harness], **kw)
+            finally:
+                K.compile, Path.resolve = real_compile, real_resolve
+            check("a harness is resolved once: the path compiled is the path that was validated",
+                  c.ok and str(harness.resolve()) in compiled and not any("Evil" in x for x in compiled))
 
             print("  M-A: the production source tree must be fully inspectable (fail closed)")
             as_root = os.geteuid() == 0
