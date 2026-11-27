@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.5.0 - unreleased
+- When the phone refuses a request (a permission set to Deny, an "Ask" prompt refused or unanswered), the PC now says which permission it was: texts are marked as not sent, the "Calling…" banner goes away, loading bars, photo and file downloads, file sending, screen mirroring and camera stop waiting. Before, they stayed pending or blamed the connection.
+- Android: requests that only read data and arrive while an "Ask" prompt is open (for example contacts right after call history) now wait for your answer instead of being refused.
+- Connecting no longer makes the phone ask for the "Remote control of this phone" permission.
+- A feature set to Deny on the PC is no longer requested from the phone (so the phone does not read or prompt for data the PC would discard); the tab says it is switched off on this PC.
+- A file the phone sends while the PC refuses it now fails at once on the phone instead of after two minutes.
+- Privacy: with "Clipboard sync" set to Deny for a phone on the PC, text and pictures copied on the PC are no longer sent to it (only the incoming direction was blocked).
+- Mirror dashboard: when mirroring fails (declined on the phone, no picture arriving) the reason now stays on screen instead of being erased at once.
+- Camera: when the phone's camera fails, is taken by another app, or screen/camera access is switched off on the phone, the phone releases it and the PC's Camera tab stops and says why (before, it kept showing "Stop camera" over a frozen or empty picture, and the phone could stay awake).
+- Files tab: a file sent to the phone is marked saved even when the phone had to rename it (it stayed "waiting for phone to save…"), saving one file no longer marks another whose name ends the same way, and a failure to save on the phone is shown on its row.
+- Android: sending several files from the phone's Files tab no longer freezes everything else the phone does for the PC while they upload, and a failed upload says why.
+- Android: Backspace typed from the PC removes a whole emoji instead of leaving a broken character.
+- Messages: a plain text addressed to several numbers is no longer handed to the phone as one bad number; the PC says that group messages need an attachment (MMS).
+- Connection: unanswered "Ask" prompts on the PC no longer make the phone drop and re-open the link.
+- The Device card's "Allow PC control" box now shows the real state: it follows "Revoke now", the Security page and approvals given in a dialog (before, it could stay ticked after a revoke, or unticked while control was on).
+- Update check (`python -m phonebridge.updates check`): a downloaded file that does not match the signed release is now deleted instead of left in the download folder.
+- With no phone connected, a text or picture message you try to send stays in the box, and dialling shows no "Calling…" banner. A call banner no longer stays on screen after the phone disconnects (with call audio on the PC, only that switch remains).
+- Phone-to-PC screen view and input: refusing the PC's screen-share dialog (or leaving it unanswered) no longer counts as an open session; the next request asks again, and touch events alone do not re-open the dialog for 30 s after a refusal.
+- Approving that dialog late no longer starts a screen view or injects waiting input if PC control was meanwhile revoked or expired, the phone disconnected, or the phone tapped Stop; touch or typed input that waited more than 5 s is dropped.
+- A screen view of the PC now ends when the phone reconnects before the PC noticed the old link was gone (capture no longer keeps running for nobody).
+- A change to a phone's "Allow PC control" setting is no longer missed when it happens within one file-timestamp tick of the previous change.
+- File transfer: cancelling a PC to phone transfer before the phone has accepted it now ends it immediately instead of after two minutes.
+- PC info on the phone: a Wi-Fi network name containing ":" no longer disconnects the phone, and the current network is recognised when the PC's language is not English.
+- Pairing: a connection that stalls or is reset no longer stops the "Pair a device" dialog from listening on Wi-Fi, and a connection lost just after you allow a phone leaves no unusable pairing behind.
+- Pairing: taking more than 30 seconds to tap "Same code — pair" on the phone no longer leaves the phone paired and the PC not; the PC now waits as long as the phone does, and the dialog keeps its code until that attempt ends.
+- Uninstall: `packaging/uninstall.sh` no longer deletes the whole folder named by `PHONEBRIDGE_HOME` (only the virtualenv the installer made there), and finds that virtualenv also when `XDG_DATA_HOME` is set.
+- Release tooling: `tools/release.sh` now stops when the build fails instead of packaging an earlier build's output.
+- Relay: a connection that fails after a phone picked it up no longer leaves an extra idle connection parked at the relay each time, and the relay server drops parked connections the PC has closed.
+- Permissions on the PC: setting a feature to Deny now applies at once, even if you had approved an "ask" prompt earlier in the same connection. Refusing an "ask" prompt now lasts for the connection instead of asking again for every message; an unanswered prompt is removed after a minute and not repeated for two minutes (the same removal applies to the PC-control prompt).
+- The "Screen mirroring and camera" permission now also applies to video arriving over UDP, and switching it off stops a stream that is already running.
+- Photos tab: no longer stays stuck loading after the phone reconnects while a page was loading.
+- Files tab: browsing the mounted phone folder no longer changes the folder shown in the tab.
+- Clipboard: expiring text received from the phone no longer wipes something you copied afterwards (a picture, a password-manager entry, a file, or an image sent by the phone).
+- Android connection: when the PC has forgotten the phone, or is connected to another phone, the app now says so (and stops retrying in the first case, or after two minutes of "busy" with that reason) instead of reporting that it cannot reach the PC.
+- Android privacy: with clipboard sync switched off or denied, copying text on the phone (or the PC's "Copy" button) no longer sends the selection to the PC; with notification sharing off or an app blocked, nothing about its notifications is sent, including their removal.
+- Android permissions: screen-sync can no longer start a capture while the phone's "Screen mirroring and camera" permission is Deny or still waiting on "Ask"; switching it to Deny stops a running screen or camera stream; stopping a stream from the PC is never blocked.
+- Android permissions: tapping Allow on a prompt after the connection that asked has ended (including after "Disconnect now") no longer carries out the request; tapping Deny is remembered until the PC disconnects.
+- Phone folder mount: file managers asking about one folder from several threads no longer get errors after a 20 s wait; with the phone disconnected the error is immediate; a phone named ".." or "." can no longer move the mount point.
+
 ## 1.4.0 - 2026-11 (unreleased; no tag/publication yet)
 - Pairing v4 (SPAKE2), device identities, forward secrecy, key rotation, signed hash-chained audit ledger, permission manager, security dashboards, USB link, signed-update verification.
 - Screen sync with PC-driven display-off and a restore watchdog.
