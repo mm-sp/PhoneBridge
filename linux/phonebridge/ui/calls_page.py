@@ -11,6 +11,8 @@ from gi.repository import Adw, GLib, Gtk  # noqa: E402
 from .loading import LoadingBar, LoadingMixin
 from .notifications_page import friendly_time
 
+DIAL_REPORT_MS = 30_000   # a call the phone places is reported within seconds
+
 _CALL_ICONS = {
     "incoming": ("call-incoming-symbolic", "Incoming"),
     "outgoing": ("call-outgoing-symbolic", "Outgoing"),
@@ -47,6 +49,7 @@ class CallsPage(Gtk.Box, LoadingMixin):
         self._loaded = False
         self._call_started: float | None = None
         self._dialing = False      # the banner shows a call asked for here that the phone hasn't reported yet
+        self._dials = 0
         self._link_lost = False    # the banner only remains for the PC-audio switch
         self._pc_audio_phone = ""
         self._n_calls = 0
@@ -318,6 +321,8 @@ class CallsPage(Gtk.Box, LoadingMixin):
         number = number.strip()
         if number and self._on_dial(number) is not False:   # False: no phone connected, nothing is being called
             self._dialing = True
+            self._dials += 1
+            GLib.timeout_add(DIAL_REPORT_MS, self._dial_unreported, self._dials)
             self._call_box.set_visible(True)
             self._call_title.set_label(f"Calling {self._name_for(number) or number}…")
             self._call_sub.set_label("Talk on your phone (or its headset)")
@@ -338,6 +343,14 @@ class CallsPage(Gtk.Box, LoadingMixin):
         if self._dialing and self._call_started is None:
             self._call_box.set_visible(False)
         self._dialing = False
+
+    def _dial_unreported(self, dial: int) -> bool:
+        """The phone says nothing about a call it couldn't place (a missing phone permission, no signal), nor about any
+        call when "Calls and contacts" is switched off there: the banner must not claim "Calling…" for ever."""
+        if dial == self._dials and self._dialing and self._call_started is None:
+            self._dialing = False
+            self._call_box.set_visible(False)
+        return False
 
     def on_disconnected(self) -> None:
         """Without the link nothing more is heard about a call and its buttons do nothing. Call audio that goes through

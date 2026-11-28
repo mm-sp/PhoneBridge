@@ -35,8 +35,10 @@ object Clipboard {
         return true
     }
 
-    /** Clipboard sync is on in the privacy settings and not denied in the permission manager. */
-    fun allowed(ctx: Context) = Privacy.clipboardEnabled(ctx) && PcAccess.mode(ctx, "clipboard") != PcAccess.Mode.DENY
+    /** Clipboard sync is on in the privacy settings and not denied in the permission manager, there or at an "Ask"
+     *  prompt of this connection. */
+    fun allowed(ctx: Context) = Privacy.clipboardEnabled(ctx) && PcAccess.mode(ctx, "clipboard") != PcAccess.Mode.DENY &&
+        BridgeService.instance?.mayShare("clipboard") != false
 
     /** Label on clips we set from the PC, so we can recognise (and later clear) our own, and nothing else. */
     const val SYNCED_LABEL = "PhoneBridge synced"

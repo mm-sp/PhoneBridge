@@ -31,6 +31,7 @@ pairing.DEVICES_DIR = tmp / "devices"
 from phonebridge.net_thread import NetThread  # noqa: E402
 from phonebridge.security import permissions  # noqa: E402
 from phonebridge.transport import ControlChannelServer  # noqa: E402
+from phonebridge.ui import calls_page as calls_module  # noqa: E402
 from phonebridge.ui.main_window import MainWindow  # noqa: E402
 
 PASS = FAIL = 0
@@ -161,6 +162,17 @@ check("a picture message is matched by its request id", second["status"] == "fai
 refuse("sms.send_mms", "sms_send")
 check("…without an id, the oldest unanswered one", first["status"] == "failed")
 
+messages.open_compose("5550188", "")
+for text in ("one", "two"):
+    messages._entry.set_text(text)
+    messages._on_send_clicked(None)
+one, two = messages._thread_msgs[-2:]
+win.on_phone_message(FP, "sms.sent", {"thread_id": "9", "address": "5550999"})
+check("a text sent to another number marks nothing here", one["status"] == "sending")
+win.on_phone_message(FP, "sms.sent", {"thread_id": "9", "address": "555-0188"})   # as the phone writes it
+check("the phone's 'sent' marks the oldest waiting text (no conversation follows if it may not show them)",
+      one["status"] is None and two["status"] == "sending")
+
 print("4. nothing connected")
 server.linked = False
 count = len(messages._thread_msgs)
@@ -199,6 +211,26 @@ calls.on_state({"state": "active", "number": "5550111"})
 calls._dial("5550100")
 refuse("call.dial", "call_dial")
 check("…but never the banner of a call in progress", calls._call_box.get_visible())
+
+calls.on_state({"state": "ended"})
+report_ms, calls_module.DIAL_REPORT_MS = calls_module.DIAL_REPORT_MS, 800
+calls._dial("5550100")
+pump(1.2)
+check("a call the phone never reports doesn't stay 'Calling…'", not calls._call_box.get_visible() and not calls._dialing)
+calls._dial("5550100")
+calls.on_state({"state": "active", "number": "5550100"})
+pump(1.2)
+check("…a reported call keeps its banner", calls._call_box.get_visible() and calls._call_started is not None)
+calls.on_state({"state": "ended"})
+calls._dial("5550100")           # its limit ends at 0.8 s
+pump(0.5)
+calls._dial("5550101")           # ...this one's at 1.3 s
+pump(0.5)
+check("…and an earlier dial's time limit doesn't end a later one", calls._call_box.get_visible() and calls._dialing)
+pump(0.7)
+check("…which still has its own", not calls._call_box.get_visible())
+calls_module.DIAL_REPORT_MS = report_ms
+calls.on_state({"state": "active", "number": "5550111"})
 
 print("6. the link drops during a call")
 calls._toggle_mute()
@@ -271,6 +303,26 @@ win._webcam_page._streaming = True
 win.on_phone_message(FP, "video.stopped", {"kind": "webcam"})
 check("a stop notice alone (sent while switching cameras) leaves the view running", win._webcam_page._streaming)
 win._webcam_page._streaming = False
+
+print("7b. the phone can't send a file or photo that was asked for")
+files._download("/DCIM/gone.jpg", open_after=True)
+win.on_phone_message(FP, "error", {"message": "gone.jpg is not a file", "source_path": "/DCIM/gone.jpg"})
+row = files._transfer_rows["get:/DCIM/gone.jpg"][0]
+check("the waiting row says why", row.get_subtitle() == "Failed: gone.jpg is not a file"
+      and "/DCIM/gone.jpg" not in files._open_when_saved)
+files._download("/DCIM/busy.jpg", open_after=False)
+files.on_receive_progress({"source_path": "/DCIM/busy.jpg", "transfer_id": "t9", "filename": "busy.jpg"}, 1, 10)
+files._update_transfer("get:/DCIM/busy.jpg", "Cancelled", None)
+win.on_phone_message(FP, "error", {"message": "cancelled", "source_path": "/DCIM/busy.jpg"})
+check("…a transfer that had started keeps its own outcome",
+      files._transfer_rows["get:/DCIM/busy.jpg"][0].get_subtitle() == "Cancelled")
+photos._on_photo_clicked("77", "p.jpg")
+win.on_phone_message(FP, "error", {"message": "the phone can't read that photo", "photo_id": "77"})
+check("a photo that can't be sent is reported on the Photos tab",
+      "can't read that photo" in photos._status_row.get_label() and "77" not in photos._open_when_saved)
+photos._status_row.set_label("")
+win.on_phone_message(FP, "error", {"message": "late", "photo_id": "77"})
+check("…once", photos._status_row.get_label() == "")
 
 print("8. permissions switched off on this PC")
 

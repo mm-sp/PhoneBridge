@@ -87,7 +87,7 @@ class BridgeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastStopReason = null
         when (intent?.action) {
-            ACTION_RECONNECT -> wake()
+            ACTION_RECONNECT -> { later { dropIfRepaired() }; wake() }
             ACTION_CONNECT -> { Store.setPaused(this, false); wake() }
             ACTION_UNPAIR -> worker.execute {
                 // Tell the PC to forget us too, so neither side keeps a dead pairing.
@@ -117,6 +117,7 @@ class BridgeService : Service() {
         runCatching { (getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(netCallback) }
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
         scheduler.shutdownNow()
+        main.removeCallbacksAndMessages(null)   // delayed work (call log, MMS) has nowhere to go now
         worker.shutdownNow()
         super.onDestroy()
     }
@@ -161,6 +162,9 @@ class BridgeService : Service() {
                 continue
             }
             backoffMs = 2000L
+            if (!running) { c.close(); return }   // the service was destroyed while this connection was being set up
+            if (!stillPaired(pc)) { c.endSession("repaired"); continue }   // paired anew meanwhile: use the new pairing
+            connectedTo = pc.fingerprint
             conn = c
             PhoneAudit.log(this, "session.start", "session" to (c.session?.sessionId ?: ""), "relayed" to Relay.active)
             setState(State.CONNECTED, "Connected to ${pc.name}" + if (Relay.active) " (through the relay)" else "")
@@ -233,7 +237,7 @@ class BridgeService : Service() {
             tryRoute({ e -> Log.i(TAG, "connect to discovered ${found.first} failed: $e") }) {
                 Connection.open(pc, host = found.first, port = found.second)
             }?.let {
-                Store.updateLan(this, found.first, found.second)
+                if (stillPaired(pc)) Store.updateLan(this, found.first, found.second)   // never into another PC's record
                 return it
             }
         }
@@ -246,6 +250,18 @@ class BridgeService : Service() {
             }) { Connection.open(pc) }?.let { return it }
         }
         return null
+    }
+
+    /** Fingerprint of the pairing [conn] was made with. */
+    @Volatile private var connectedTo = ""
+
+    private fun stillPaired(pc: PairedPc) = Store.load(this)?.fingerprint == pc.fingerprint
+
+    /** After pairing anew: a link to the previously paired PC ends, so that the connection loop takes up the new one. */
+    private fun dropIfRepaired() {
+        val c = conn ?: return
+        val now = Store.load(this)?.fingerprint ?: return
+        if (now != connectedTo) c.endSession("repaired")
     }
 
     /** The PC is serving another phone: say so and look again a little later. */
@@ -285,9 +301,9 @@ class BridgeService : Service() {
         pingTask = scheduler.scheduleWithFixedDelay({ send("ping") }, 30, 30, TimeUnit.SECONDS)
         syncTask = scheduler.scheduleWithFixedDelay({ runCatching { screenSync.tick() } }, 5, 5, TimeUnit.SECONDS)
         screenSync.onLinkUp()
-        worker.execute { NotificationRelay.instance?.sendAll() }
-        worker.execute { Clipboard.sendCurrentIfReadable(this) }
-        worker.execute {
+        later { NotificationRelay.instance?.sendAll() }
+        later { Clipboard.sendCurrentIfReadable(this) }
+        later {
             send("screen.state", ScreenControl.state(this))
             send("volume.state", ScreenControl.volumeState(this))
         }
@@ -311,10 +327,11 @@ class BridgeService : Service() {
     }
 
     fun send(type: String, payload: JSONObject = JSONObject()) {
+        if (!maySend(type)) return   // "Messages (read)" / "Calls and contacts" set to Deny, or refused at the prompt
         if (Looper.myLooper() == Looper.getMainLooper()) {
             // Android forbids network I/O on the main thread (NetworkOnMainThreadException),
             // and callbacks like camera/projection/call-state all arrive there.
-            worker.execute { send(type, payload) }
+            later { send(type, payload) }
             return
         }
         val c = conn ?: return
@@ -327,6 +344,22 @@ class BridgeService : Service() {
     }
 
     fun connection(): Connection? = conn
+
+    /** Whether data covered by the permission [feature] may go to the PC right now (see [PcAccess.mayShare]). */
+    fun mayShare(feature: String) =
+        PcAccess.mayShare(PcAccess.mode(this, feature), askAnswers.get(conn?.session?.sessionId ?: "", feature))
+
+    private fun maySend(type: String) = PcAccess.sharedFeature(type)?.let { mayShare(it) } ?: true
+
+    /** Runs [block] on a worker, or not at all once the service is gone: a late callback (an MMS result, say) must not
+     *  crash the app because the workers have shut down. */
+    fun later(block: () -> Unit) {
+        try {
+            worker.execute(block)
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            Log.i(TAG, "dropped work after the service stopped")
+        }
+    }
 
     private val progressSent = HashMap<String, Pair<Long, Int>>()
 
@@ -347,7 +380,7 @@ class BridgeService : Service() {
         send("load.progress", JSONObject().put("what", what).put("done", done).put("total", total))
     }
 
-    fun sendDeviceInfo() = worker.execute { send("device.info", DeviceInfo.collect(this)) }
+    fun sendDeviceInfo() = later { send("device.info", DeviceInfo.collect(this)) }
 
     // ---------------------------------------------------------------- dispatch
 
@@ -514,9 +547,9 @@ class BridgeService : Service() {
             "photos.list" -> bg {
                 send("photos.list_result", Photos.list(this, p.optInt("offset", 0), p.optInt("limit", 60)) { d, t -> progress("photos", d, t) })
             }
-            "photos.get" -> bgLong { Photos.sendPhoto(this, p.optString("id")) }
+            "photos.get" -> fetch(c, JSONObject().put("photo_id", p.optString("id"))) { Photos.sendPhoto(this, p.optString("id")) }
             "files.list" -> bg { send("files.list_result", Files.list(p.optString("path", "")) { d, t -> progress("files", d, t) }) }
-            "files.get" -> bgLong { Files.sendFile(this, p.optString("path")) }
+            "files.get" -> fetch(c, JSONObject().put("source_path", p.optString("path"))) { Files.sendFile(this, p.optString("path")) }
 
             "apps.list_request" -> bg { send("apps.list", Apps.list(this) { d, t -> progress("apps", d, t) }) }
             "apps.launch" -> main.post { Apps.launch(this, p.optString("pkg")) }
@@ -548,18 +581,24 @@ class BridgeService : Service() {
         }
     }
 
-    private fun bgLong(block: () -> Unit) = bg(Transfer.pool, block)
+    private fun bg(block: () -> Unit) = worker.execute {
+        reportFailures(block) { send("error", JSONObject().put("message", it)) }
+    }
 
-    private fun bg(block: () -> Unit) = bg(worker, block)
+    /** Sends the PC a file it asked for on [c]. A failure names the request ([about]), so the PC stops waiting for that
+     *  file; once [c] is gone it is not reported at all, or it would end the same request made again on a new link. */
+    private fun fetch(c: Connection, about: JSONObject, block: () -> Unit) = Transfer.pool.execute {
+        reportFailures(block) { if (c === conn) send("error", about.put("message", it)) }
+    }
 
-    private fun bg(pool: java.util.concurrent.ExecutorService, block: () -> Unit) = pool.execute {
+    private fun reportFailures(block: () -> Unit, report: (String) -> Unit) {
         try {
             block()
         } catch (e: SecurityException) {
-            send("error", JSONObject().put("message", "Permission missing on phone: ${e.message}"))
+            report("Permission missing on phone: ${e.message}")
         } catch (e: Exception) {
             Log.w(TAG, "handler failed", e)
-            send("error", JSONObject().put("message", e.toString()))
+            report(e.message ?: e.toString())
         }
     }
 
@@ -599,7 +638,7 @@ class BridgeService : Service() {
 
     /** A picture/group message arrived or was stored: refresh that conversation on the PC. */
     private val mmsObserver = object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-        private val fire = Runnable { worker.execute { runCatching { announceNewestMms() } } }
+        private val fire = Runnable { later { runCatching { announceNewestMms() } } }
         override fun onChange(selfChange: Boolean) {
             main.removeCallbacks(fire)
             main.postDelayed(fire, 2500)  // the MMS arrives in several writes; wait for them to settle
@@ -607,7 +646,8 @@ class BridgeService : Service() {
     }
 
     private fun announceNewestMms() {
-        if (!isConnected()) return
+        // Even the sender of a picture message stays on the phone while the PC may not read messages.
+        if (!isConnected() || !mayShare("sms")) return
         contentResolver.query(android.provider.Telephony.Mms.CONTENT_URI,
             arrayOf(android.provider.Telephony.Mms._ID, android.provider.Telephony.Mms.THREAD_ID, android.provider.Telephony.Mms.MESSAGE_BOX),
             null, null, "${android.provider.Telephony.Mms.DATE} DESC LIMIT 1")?.use { c ->
@@ -649,7 +689,7 @@ class BridgeService : Service() {
     private fun dropStaleLink(why: String) {
         val c = conn ?: run { wake(); return }
         Log.i(TAG, "dropping connection: $why")
-        worker.execute { c.close() }
+        later { c.close() }
         wake()
     }
 

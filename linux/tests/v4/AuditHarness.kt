@@ -45,6 +45,15 @@ fun main(args: Array<String>) {
         println("FEATURE $t ${PcAccess.featureFor(t)}")
     }
 
+    for (t in listOf("sms.new", "sms.thread_list", "sms.thread_messages", "call.ringing", "call.state", "calls.history",
+        "contacts.list", "sms.sent", "sms.mms_status", "permission.denied", "error", "ping")) {
+        println("SHARED $t ${PcAccess.sharedFeature(t)}")
+    }
+
+    for (m in PcAccess.Mode.values()) {
+        println("MAY_$m " + listOf(null, true, false).joinToString(" ") { PcAccess.mayShare(m, it).toString() })
+    }
+
     val answers = PcAccess.SessionAnswers()
     answers.record("s1", "sms", true)
     answers.record("s1", "files", false)

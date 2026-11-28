@@ -366,7 +366,7 @@ with `ch` set to `file`/`video` and `payload` holding raw bytes directly
 | `photos.list_result` (extended) | phone→pc | adds `offset, total`; photos add `name, size` |
 | `files.list` | pc→phone | `{path}` — relative to the phone's shared storage root |
 | `files.list_result` | phone→pc | `{path, entries:[{name, is_dir, size, mtime}], free, total, error?}` |
-| `files.get` | pc→phone | `{path}` — answered with `file.offer` (+chunks) carrying `source_path` |
+| `files.get` | pc→phone | `{path}` — answered with `file.offer` (+chunks) carrying `source_path`, or `error {message, source_path}` if the phone can't send it (`photos.get` likewise: `error {message, photo_id}`) |
 | `file.offer` (extended) | pc→phone | optional `dest_path` (phone folder to save into, default `Download/PhoneBridge`) |
 | `file.saved` | phone→pc | `{transfer_id, filename, path}` once a PC→phone file is written (`filename` may differ from the offered one if that name was taken). If writing it fails, the phone sends `error {message, transfer_id}` instead |
 | `webcam.start` (extended) | pc→phone | `{facing: front\|back}` |
@@ -377,6 +377,13 @@ with `ch` set to `file`/`video` and `payload` holding raw bytes directly
 | `mirror.input` (extended) | pc→phone | adds `kind: long_press {x,y}` and keys `notifications, quick_settings, power, lock, screenshot, backspace, enter` |
 | `apps.list` (extended) | phone→pc | apps add `system` |
 
+**Phone permissions and pushed data.** A permission set to **Deny** on the phone also stops what the phone would send on
+its own. "Messages (read)": no `sms.new`, `sms.thread_list` or `sms.thread_messages`, and no `sms.sent` announcing an
+incoming picture message (the `sms.sent` confirming a text the PC sent is still sent). "Calls and contacts": no
+`call.ringing`, `call.state`, `calls.history` or `contacts.list`; the PC takes its own "Calling…" banner down if no
+call state arrives within 30 s. With **Ask** these pushes go on until the user refuses that permission's prompt, which
+then holds for the connection like a Deny (the same applies to pushed notifications and clipboard text).
+
 **Paging.** `sms.list_threads`, `sms.get_thread`, `calls.history_request`,
 `contacts.list_request` and `photos.list` take `{offset, limit}` (PC defaults: 20 / 20 / 20 /
 50 / 50) and their answers carry `{offset, total, has_more}`; offset 0 replaces the PC's
@@ -386,9 +393,11 @@ message; each page is returned oldest-first. While building any of these the pho
 contacts, files, photos, apps) for the PC's progress bars.
 
 **LAN discovery (UDP 28101).** If the stored `lan_ip` stops answering (new DHCP lease), the
-phone broadcasts `{"phonebridge":"discover","fp":"<fingerprint>"}`; the PC replies
-`{"phonebridge":"here","port":28100}` only for fingerprints it has a pairing record for,
-and the phone connects to the replying address (TLS pinning still applies).
+phone broadcasts `{"phonebridge":"discover","tag":"<tag>"}`, where `tag` is the first 32 hex characters of
+`HMAC-SHA256(session_key, "phonebridge-discover-v2|<unix time // 300>")`; the pairing fingerprint is never broadcast.
+The PC replies `{"phonebridge":"here","port":28100}` only if the tag verifies for a phone it has paired with (this
+5-minute bucket or the one either side of it), and the phone connects to the replying address (TLS pinning still
+applies).
 
 **Wi-Fi first pairing.** While the Pair dialog is open the PC also listens on TCP
 28102 and runs the identical section-1 handshake there (same offer/hello/ack lines, same
@@ -397,15 +406,17 @@ encrypted lan_info frame; `lan_ip` is the address the phone reached). The QR pay
 With only the PIN, the phone broadcasts `{"phonebridge":"pair_discover"}` to UDP 28101 and
 the PC answers `{"phonebridge":"pairing_here","name","port"}` only while its dialog is
 open. Bluetooth RFCOMM is the fallback; the phone turns Bluetooth on itself if needed.
-Re-pairing removes the PC's older records with the same phone name.
+Once a re-pairing has completed (the phone's identity key has arrived), the PC removes its older records with the
+same phone name; an attempt that fails leaves them alone.
 
 **Bluetooth pairing channel.** The PC listens on RFCOMM channel 4 without an SDP record,
 so the phone connects to channel 4 directly (UUID lookup is only a fallback).
 
 **Unpaired / liveness.** A connection from an unknown fingerprint gets the plain bytes
 `PBUNPAIRED\n` before close, so the phone shows "pair again" instead of retrying. The
-phone sends `ping` every 15 s (PC answers `pong`); either side drops a link that has been
-silent for ~45-50 s, and the phone reconnects at once when its network changes.
+phone sends `ping` every 30 s (PC answers `pong`); the phone drops a link that has been silent for 90 s and the PC
+one that has been silent for 100 s, and the phone reconnects at once when its network changes. While a permission
+prompt keeps the PC from reading, it sends an unsolicited `pong` every 20 s.
 
 ### 4c. Phone controls the PC (the phone app's Device/Files/Screen/Clipboard/Apps/Mouse/Keyboard/Ports tabs)
 
@@ -446,7 +457,7 @@ layer below it never changes — every later phase is additive.
 | `sms.thread_messages` (extended) | phone->pc | MMS rows are merged by time: `{mms: true, text, attachments:[{mime, name, thumb(base64 jpeg)}]}`; `sms_count` = SMS rows in the page (the PC pages by SMS rows only) |
 | `hotspot.request` | pc->phone | `{action: start_local \| stop_local \| open_settings}` |
 | `hotspot.state` | phone->pc | `{on, kind: local_only \| tether, ssid?, password?, tether_on?, error?, message?}` — local-only hotspot = private Wi-Fi with no internet; `open_settings` shows a notification that opens the phone's hotspot screen |
-| `pc.status` (extended) | pc->phone | `{denied: true, message}` when "Allow PC control" is off for this phone |
+| `pc.status` (extended) | pc->phone | `{denied: true, message}` when "Allow PC control" is off for this phone (the phone shows `message` in the open tab); `{ok: true, approved: true, message}` once the PC's owner allows it (the phone reloads the open tab) |
 
 ### 4e. Sending MMS
 

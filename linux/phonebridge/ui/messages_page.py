@@ -188,6 +188,18 @@ class MessagesPage(Gtk.Box, LoadingMixin):
         self._render_thread()
         self._scroll_to_end()
 
+    def text_sent(self, address: str) -> None:
+        """sms.sent: the phone handed a text to this number to the network. Normally the conversation follows and replaces
+        the bubble; it doesn't when the phone may not show its messages to this PC."""
+        if not _same_number(address, self._active_address):
+            return
+        for message in self._thread_msgs:   # the oldest unanswered text typed here (those have no id)
+            if message.get("status") == "sending" and not message.get("mms") and not message.get("id"):
+                message["status"] = None
+                self._render_thread()
+                self._scroll_to_end()
+                return
+
     # --- data from phone ---
 
     def set_threads(self, payload: dict) -> None:

@@ -71,8 +71,9 @@ def main():
         if p.returncode:
             print(p.stdout[-800:], p.stderr[-800:])
         out = [ln.split(" ", 1) for ln in p.stdout.splitlines() if " " in ln]
-        d = {k: v for k, v in out if k != "FEATURE"}
+        d = {k: v for k, v in out if k not in ("FEATURE", "SHARED")}
         feats = dict(v.split(" ", 1) for k, v in out if k == "FEATURE")
+        shared = dict(v.split(" ", 1) for k, v in out if k == "SHARED")
         check("the harness ran", p.returncode == 0 and "CLEAN" in d)
         print("1. audit chain")
         check("a clean log verifies on Android (5 records)", d.get("CLEAN") == "true 5")
@@ -104,6 +105,30 @@ def main():
         for t in ("mirror.stop", "webcam.stop"):
             check(f"{t} is never blocked (it only takes access away)", feats.get(t) == "null")
         check("webcam.switch is gated as 'screen'", feats.get("webcam.switch") == "screen")
+        print("2b. what the phone may send the PC is covered by the same permissions")
+        for t in ("sms.new", "sms.thread_list", "sms.thread_messages"):
+            check(f"{t} stays on the phone when 'Messages (read)' is Deny", shared.get(t) == "sms")
+        for t in ("call.ringing", "call.state", "calls.history", "contacts.list"):
+            check(f"{t} stays on the phone when 'Calls and contacts' is Deny", shared.get(t) == "calls")
+        for t in ("sms.sent", "sms.mms_status", "permission.denied", "error", "ping"):
+            check(f"{t} (the answer to something the PC did) is not held back", shared.get(t) == "null")
+        check("Allow shares", d.get("MAY_ALLOW") == "true true true")
+        check("Deny never does, whatever was answered before", d.get("MAY_DENY") == "false false false")
+        check("Ask shares until its prompt is refused", d.get("MAY_ASK") == "true true false")
+        service = (ANDROID / "BridgeService.kt").read_text(encoding="utf-8")
+        send = service[service.find("    fun send(type: String, payload"):]
+        send = send[:send.find("\n    }\n")]
+        check("every message goes through that check before it is sent",
+              "if (!maySend(type)) return" in send and send.index("maySend") < send.index("c.send(")
+              and "PcAccess.sharedFeature(type)?.let { mayShare(it) }" in service
+              and 'askAnswers.get(conn?.session?.sessionId ?: "", feature)' in service)
+        mms = service[service.find("    private fun announceNewestMms("):]
+        mms = mms[:mms.find("\n    }\n")]
+        check("a new picture message is not announced either (it names the sender)",
+              '!mayShare("sms")) return' in mms and mms.index('!mayShare("sms")') < mms.index("send("))
+        for name, feature in (("NotificationRelay.kt", "notifications"), ("Clipboard.kt", "clipboard")):
+            check(f"{name}: a refused prompt stops what is pushed too",
+                  f'mayShare("{feature}") != false' in (ANDROID / name).read_text(encoding="utf-8"))
         print("3. what 'Ask' remembers for one connection")
         check("a yes is remembered", d.get("ANSWER_YES") == "true")
         check("a no is remembered", d.get("ANSWER_NO") == "false")

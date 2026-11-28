@@ -681,7 +681,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._desktop_notify(f"sms-{payload.get('thread_id')}", who, payload.get("message", {}).get("text", ""),
                              "messages")
 
-    def _msg_sms_sent(self, _payload: dict) -> None:
+    def _msg_sms_sent(self, payload: dict) -> None:
+        self._messages_page.text_sent(str(payload.get("address") or ""))
         self._send("sms.list_threads", {"offset": 0, "limit": SMS_PAGE})
 
     def _msg_calls_history(self, payload: dict) -> None:
@@ -739,6 +740,8 @@ class MainWindow(Adw.ApplicationWindow):
             self._sync.on_mirror_error(payload.get("message", "") or payload.get("state"))
             self._mirror_page.stop_if_running()
             self.toast(payload.get("message", ""))
+        else:
+            self._sync.on_phone_status(str(payload.get("message", "")))
 
     def _msg_webcam_status(self, payload: dict) -> None:
         ended = payload.get("state") in ("error", "stopped")
@@ -752,6 +755,10 @@ class MainWindow(Adw.ApplicationWindow):
         message = payload.get("message", "Phone reported an error")
         if payload.get("transfer_id"):
             self._files_page.on_phone_failed(str(payload["transfer_id"]), message)
+        if payload.get("source_path"):
+            self._files_page.request_failed(str(payload["source_path"]), message)
+        if payload.get("photo_id"):
+            self._photos_page.request_failed(str(payload["photo_id"]), message)
         self.toast(message)
 
     def _msg_permission_denied(self, payload: dict) -> None:
@@ -841,12 +848,13 @@ class MainWindow(Adw.ApplicationWindow):
         """text = "host[:port]" or "" to switch the relay off."""
         from .. import relay_client
 
-        host, _, port_text = text.partition(":")
-        host = host.strip()
-        if port_text and not port_text.isdigit():
-            self.toast("The port must be a number, e.g. relay.example.com:28200")
-            return
-        port = int(port_text) if port_text else relay_client.DEFAULT_PORT
+        host, port = "", relay_client.DEFAULT_PORT
+        if text.strip():
+            try:
+                host, port = relay_client.parse_address(text)
+            except ValueError as exc:
+                self.toast(str(exc))
+                return
         relay_client.save_config(host or None, port)
         self._net_thread.run_coro(self._server.configure_relay(host or None, port))
         self.toast(f"Relay {host}:{port} turned on" if host else "Relay turned off")

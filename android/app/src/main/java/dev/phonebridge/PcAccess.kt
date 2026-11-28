@@ -54,6 +54,19 @@ object PcAccess {
         else -> null
     }
 
+    /** The permission covering message and call data this phone sends the PC, by itself or in answer (null: not covered
+     *  here; notifications and the clipboard have their own checks). `sms.sent` is not listed: after a text the PC sent it
+     *  only repeats the number the PC gave. */
+    fun sharedFeature(type: String): String? = when (type) {
+        "sms.new", "sms.thread_list", "sms.thread_messages" -> "sms"
+        "call.ringing", "call.state", "calls.history", "contacts.list" -> "calls"
+        else -> null
+    }
+
+    /** False when nothing of a permission may leave the phone, pushed or already being answered: it is Deny, or it is Ask
+     *  and the user refused its prompt ([answer], for this connection). An unanswered Ask doesn't stop what is pushed. */
+    fun mayShare(mode: Mode, answer: Boolean?) = mode == Mode.ALLOW || (mode == Mode.ASK && answer != false)
+
     private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences("pc_access", Context.MODE_PRIVATE)
 
     fun mode(ctx: Context, feature: String): Mode =
