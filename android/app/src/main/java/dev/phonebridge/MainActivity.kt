@@ -290,6 +290,15 @@ class MainActivity : Activity() {
     private fun routePcMessage(type: String, p: org.json.JSONObject) {
         // Clipboard history and file-saved notices are kept even when their tab isn't open.
         if (type == "pc.file_saved" && current !== filesPanel) filesPanel.onMessage(type, p)
+        if (type == "pc.status" && p.optBoolean("denied")) {
+            current?.onDenied(p.optString("message"))
+            return
+        }
+        if (type == "pc.status" && p.optBoolean("approved")) {
+            toast(p.optString("message"))
+            current?.onShow()   // load what was refused while the PC was waiting for its owner
+            return
+        }
         current?.onMessage(type, p)
     }
 

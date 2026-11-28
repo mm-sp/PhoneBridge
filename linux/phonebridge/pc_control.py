@@ -124,7 +124,7 @@ class PcControl:
             permissions.set_mode(device, "remote_control", permissions.ALLOW, duration=minutes * 60)
             self._gate_cache.pop(fp, None)
             self._server.audit(sec_ledger.PERMISSION, fp, feature="remote_control", action="pc_control.approved", minutes=minutes)
-            message = {"message": f"PC control approved on the PC for {minutes} min", "ok": True}
+            message = {"message": f"PC control approved on the PC for {minutes} min", "ok": True, "approved": True}
         else:
             self._approval_cooldown[fp] = time.monotonic() + self.APPROVAL_COOLDOWN
             self._server.audit(sec_ledger.PERMISSION, fp, feature="remote_control", action="pc_control.refused")

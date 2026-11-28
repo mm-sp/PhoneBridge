@@ -49,6 +49,15 @@ abstract class PcPanel(protected val act: Activity) {
     open fun onShow() {}
     open fun onHide() {}
     open fun onMessage(type: String, p: JSONObject) {}
+    /** The PC refused a request (`pc.status` with `denied`): control is off or awaiting approval, or the feature is
+     *  unavailable. Show [message] where the answer was going to appear, so nothing stays "Loading…". */
+    open fun onDenied(message: String) {}
+
+    /** Replaces a tab's content with the PC's explanation. */
+    protected fun explain(list: LinearLayout, message: String) {
+        list.removeAllViews()
+        list.addView(text(message, 14f, color = Ui.WARN))
+    }
 
     protected fun send(type: String, payload: JSONObject = JSONObject()): Boolean {
         val svc = BridgeService.instance
@@ -124,8 +133,9 @@ class DevicePanel(act: Activity) : PcPanel(act) {
 
     init { list.addView(text("Loading PC info…", color = Ui.MUTED)) }
 
-    override fun onShow() { handler.post(poll) }
+    override fun onShow() { handler.removeCallbacks(poll); handler.post(poll) }
     override fun onHide() { handler.removeCallbacks(poll) }
+    override fun onDenied(message: String) = explain(list, message)
 
     override fun onMessage(type: String, p: JSONObject) {
         if (type != "pc.info") return
@@ -211,6 +221,11 @@ class FilesPanel(act: Activity) : PcPanel(act) {
     }
 
     override fun onShow() = load(path)
+
+    override fun onDenied(message: String) {
+        status.text = message
+        list.removeAllViews()
+    }
 
     private fun load(p: String) {
         if (send("pcfiles.list", JSONObject().put("path", p))) status.text = "Loading…"
@@ -340,8 +355,8 @@ class ScreenPanel(act: Activity) : PcPanel(act) {
         if (streaming) stop() else if (startStream("pc.screen_start")) status.text = "Starting…"
     }
 
-    private fun stop() {
-        BridgeService.instance?.send("pc.screen_stop")
+    private fun stop(tellPc: Boolean = true) {
+        if (tellPc) BridgeService.instance?.send("pc.screen_stop")
         BridgeService.pcFrameListener = null
         streaming = false
         startBtn.text = "Start"
@@ -351,6 +366,13 @@ class ScreenPanel(act: Activity) : PcPanel(act) {
     }
 
     override fun onHide() { if (streaming) stop() }
+
+    override fun onDenied(message: String) {
+        if (full != null) toast(message)
+        // The PC is not streaming, and would treat a "stop" now as one more request to approve.
+        if (streaming) stop(tellPc = false)
+        status.text = message
+    }
 
     /** Back button: leave full screen first. */
     fun handleBack(): Boolean {
@@ -608,6 +630,8 @@ class AppsPanel(act: Activity) : PcPanel(act) {
 
     override fun onShow() { if (apps.length() == 0) load() }
 
+    override fun onDenied(message: String) { status.text = message }
+
     override fun onHide() = hideKeyboard()
 
     private fun hideKeyboard() {
@@ -774,6 +798,7 @@ class PortsPanel(act: Activity) : PcPanel(act) {
     init { list.addView(text("Loading…", color = Ui.MUTED)) }
 
     override fun onShow() { send("pc.ports_request") }
+    override fun onDenied(message: String) = explain(list, message)
 
     override fun onMessage(type: String, p: JSONObject) {
         if (type != "pc.ports") return
@@ -807,6 +832,7 @@ class ServersPanel(act: Activity) : PcPanel(act) {
     init { list.addView(text("Loading…", color = Ui.MUTED)) }
 
     override fun onShow() { send("pc.servers_request") }
+    override fun onDenied(message: String) = explain(list, message)
 
     override fun onMessage(type: String, p: JSONObject) {
         when (type) {
@@ -1067,7 +1093,15 @@ class TerminalPanel(act: Activity) : PcPanel(act) {
         showKeyboard()
     }
 
-    private fun write(data: String) { send("pc.term_input", JSONObject().put("data", data)) }
+    // Keys typed with no session open go nowhere: the PC would only refuse each one again.
+    private fun write(data: String) { if (opened) send("pc.term_input", JSONObject().put("data", data)) }
+
+    override fun onDenied(message: String) {
+        opened = false
+        screen.clear()
+        screen.feed(message)
+        render()
+    }
 
     /** Characters from the phone keyboard (or "/" "-"), with CTRL/ALT applied like Termux. */
     private fun type(t: String) {

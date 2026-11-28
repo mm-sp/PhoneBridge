@@ -212,6 +212,8 @@ async def main_async() -> int:
     check("while a prompt is open the phone is told to wait", first.payload.get("denied") is True and "approval" in first.payload["message"].lower())
     done = await next_status()
     check("approval on the PC enables control", done.payload.get("ok") is True and prompts == ["Test Phone"])
+    check("…and the phone is told it is an approval, so it can load what it was refused",
+          done.payload.get("approved") is True and "denied" not in done.payload)
     left = pairing.PairedDevice.load("cafe").pc_control_until - time.time()
     check("granted for the chosen 15 minutes", 14 * 60 < left <= 15 * 60 + 5)
     check("requests now work", (await ask("pc.info_request")).type == "pc.info")
