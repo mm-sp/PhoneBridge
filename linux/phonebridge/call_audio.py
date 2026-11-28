@@ -22,12 +22,18 @@ _HFP_PROFILES = ("headset-head-unit", "headset-head-unit-msbc", "headset-head-un
 _previous_profile: dict[str, str] = {}
 
 
-def _run(*cmd: str, timeout: float = 8.0) -> str:
+def _try(*cmd: str, timeout: float = 8.0) -> tuple[bool, str]:
+    """(it exited successfully, its output)."""
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         log.debug("%s failed: %s", cmd[0], exc)
-        return ""
+        return False, ""
+    return done.returncode == 0, done.stdout
+
+
+def _run(*cmd: str, timeout: float = 8.0) -> str:
+    return _try(*cmd, timeout=timeout)[1]
 
 
 def find_phone(phone_name: str) -> str | None:
@@ -94,9 +100,10 @@ def route_to_pc(phone_name: str) -> tuple[bool, str]:
     target = next((p for p in _HFP_PROFILES if p in profiles), None)
     if target is None:
         return False, status(phone_name).get("reason", "No HFP profile available.")
+    if not _try("pactl", "set-card-profile", card, target)[0]:
+        return False, "This PC couldn't switch the phone to the headset profile; the call audio stays on the phone."
     if active not in _HFP_PROFILES:
         _previous_profile[card] = active
-    _run("pactl", "set-card-profile", card, target)
     return True, "Call audio is on this PC"
 
 
@@ -106,6 +113,6 @@ def restore(phone_name: str) -> None:
     if addr is None:
         return
     card = _card_name(addr)
-    previous = _previous_profile.pop(card, None)
-    if previous:
-        _run("pactl", "set-card-profile", card, previous)
+    previous = _previous_profile.get(card)
+    if previous and _try("pactl", "set-card-profile", card, previous)[0]:
+        del _previous_profile[card]   # kept after a failure, so the next restore tries again
