@@ -175,6 +175,9 @@ def _pairing_exchange(
     device.last_lan_port = lan_port
     device.cert_fingerprint = cert_fingerprint
     device.save()
+    from .pairing import remove_stale_pairings
+
+    remove_stale_pairings(device)   # only now: this pairing is complete and replaces the phone's earlier one
     return device
 
 

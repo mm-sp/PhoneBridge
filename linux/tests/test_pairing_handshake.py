@@ -151,7 +151,14 @@ def main() -> int:
         check(f"{why} aborts pairing and leaves nothing behind",
               isinstance(outx.get("error"), pairing.PairingError)
               and not ({d.fingerprint for d in pairing.PairedDevice.list_all()} - before))
+        check("…and the working pairing of the same phone is untouched",
+              {d.fingerprint for d in pairing.PairedDevice.list_all()} == before and dev.fingerprint in before
+              and pairing.PairedDevice.load(dev.fingerprint).identity_pub == dev.identity_pub)
     bt.PHONE_CONFIRM_DEADLINE = confirm_wait
+    again = pairing.PendingPairing(bt_addr=None, pc_name="PC")
+    outr, _viewr = run_handshake(again, again.token)
+    check("a pairing that completes replaces the phone's earlier one",
+          [d.fingerprint for d in pairing.PairedDevice.list_all() if d.name == dev.name] == [outr["device"].fingerprint])
 
     print("2. wrong PIN is refused, counted, and locks the dialog out")
     pc2 = pairing.PendingPairing(bt_addr=None, pc_name="PC")

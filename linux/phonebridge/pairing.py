@@ -439,7 +439,8 @@ class PendingPairing:
                               platform=platform if platform in PLATFORMS else "android",
                               pc_pub_acked=pc_identity().public_b64)   # lan_info hands the phone this key right away
         device.save()
-        remove_stale_pairings(device)
+        # An earlier pairing of this phone stays until the caller has the phone's identity key (remove_stale_pairings):
+        # an attempt that fails or is cancelled on the phone must leave the working pairing alone.
         return device
 
     def lan_info_message(self, lan_ip: str, lan_port: int, cert_fingerprint: str) -> dict:
