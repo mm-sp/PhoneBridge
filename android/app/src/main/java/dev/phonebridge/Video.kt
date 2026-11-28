@@ -184,12 +184,10 @@ class VideoManager(private val svc: BridgeService) {
     private var mirrorStream: H264Stream? = null
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
-    private var projectionResult: Pair<Int, Intent>? = null
-    /** A consent prompt is on screen: a second request (e.g. sync START_MIRRORING + mirror.start) must not stack another. */
-    @Volatile private var consentPending = false
-    /** Bumped for every consent request; a result from an older prompt (stale activity) is ignored. */
-    @Volatile var consentGen = 0
-        private set
+    /** Android's capture prompt: a second request (e.g. sync START_MIRRORING + mirror.start) must not stack another, and
+     *  a result from an older or called-off prompt is ignored. */
+    private val consent = ConsentPrompt()
+    val consentGen get() = consent.generation
 
     private var camStream: H264Stream? = null
     private var camera: CameraDevice? = null
@@ -221,16 +219,15 @@ class VideoManager(private val svc: BridgeService) {
 
     fun requestMirror() {
         stopWebcam()
-        if (mirrorStream != null || consentPending) return
+        if (mirrorStream != null) return
+        val gen = consent.open() ?: return
         // A grant is never reused: once stopped, a projection is dead, and on current Android a reused grant yields a
         // virtual display that sends no frames at all (seen on Android 17) while also skipping the user's consent.
         // Every capture start shows Android's own prompt.
-        projectionResult = null
-        consentGen++
         // CLEAR_TASK: an unanswered prompt from an earlier request must not be reused (its result would be reported as "declined").
         val intent = Intent(svc, ScreenCaptureActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        consentPending = true
-        svc.main.postDelayed({ consentPending = false; releaseConsentWake() }, 90_000)   // never wedge if the prompt is dismissed silently
+        // Never wedge if the prompt is dismissed silently. (An older prompt's timer leaves a newer prompt alone.)
+        svc.main.postDelayed({ if (consent.stopWaiting(gen)) releaseConsentWake() }, 90_000)
         holdConsentWake()
         if (android.provider.Settings.canDrawOverlays(svc)) {
             svc.startActivity(intent)
@@ -285,8 +282,11 @@ class VideoManager(private val svc: BridgeService) {
             svc.startActivity(launch, android.app.ActivityOptions.makeBasic().setLaunchDisplayId(appDisplayId).toBundle())
         } catch (e: Exception) {
             Log.w(BridgeService.TAG, "app stream failed", e)
-            mirrorStream = stream  // so stopMirror() releases everything it created
-            stopMirror()
+            // Not stopMirror(): nothing was announced or holds the wake lock yet.
+            virtualDisplay?.release(); virtualDisplay = null
+            appDisplayId = -1
+            mirrorStream = null
+            stream.stop()
             return fail("Couldn't stream that app: ${e.message ?: e.javaClass.simpleName}")
         }
         svc.holdWake()
@@ -296,8 +296,12 @@ class VideoManager(private val svc: BridgeService) {
         svc.main.postDelayed({ mirrorStream?.requestKeyframe() }, 800)
     }
 
-    fun onProjectionResult(code: Int, data: Intent?) {
-        consentPending = false
+    fun onProjectionResult(gen: Int, code: Int, data: Intent?) {
+        // Only the newest prompt may report; one that was replaced or called off must not start a capture or read as "declined".
+        if (!consent.answer(gen)) {
+            Log.i(BridgeService.TAG, "ignored a stale screen-capture consent result ($code)")
+            return
+        }
         releaseConsentWake()
         Log.i(BridgeService.TAG, "screen-capture consent result code=$code (RESULT_OK=${Activity.RESULT_OK})")
         if (code != Activity.RESULT_OK || data == null) {
@@ -311,7 +315,6 @@ class VideoManager(private val svc: BridgeService) {
             svc.screenSync.onMirrorDenied(message)
             return
         }
-        projectionResult = code to data
         try {
             startMirror(code, data)
         } catch (e: Exception) {
@@ -331,14 +334,22 @@ class VideoManager(private val svc: BridgeService) {
         val scale = minOf(1f, 1280f / maxOf(metrics.widthPixels, metrics.heightPixels))
         val w = ((metrics.widthPixels * scale).toInt() / 16) * 16
         val h = ((metrics.heightPixels * scale).toInt() / 16) * 16
-        val stream = H264Stream(pc, w, h, 5_000_000, staticContent = true)
-        proj.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { svc.main.post { stopMirror() } }
-        }, svc.main)
-        virtualDisplay = proj.createVirtualDisplay("PhoneBridge", w, h, metrics.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, stream.inputSurface, null, null)
-        projection = proj
-        mirrorStream = stream
+        var stream: H264Stream? = null
+        try {
+            val encoder = H264Stream(pc, w, h, 5_000_000, staticContent = true).also { stream = it }
+            proj.registerCallback(object : MediaProjection.Callback() {
+                // Only this capture's end: a late notice from an earlier one must not stop its successor.
+                override fun onStop() { svc.main.post { if (projection === proj) stopMirror() } }
+            }, svc.main)
+            virtualDisplay = proj.createVirtualDisplay("PhoneBridge", w, h, metrics.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, encoder.inputSurface, null, null)
+            projection = proj
+            mirrorStream = encoder
+        } catch (e: Exception) {
+            stream?.stop()   // nothing is left running (or capturing) after a failed start
+            runCatching { proj.stop() }
+            throw e
+        }
         svc.holdWake()
         svc.send("video.started", JSONObject().put("kind", "mirror").put("width", w).put("height", h).put("rotation", 0)
             .put("input_available", InputService.instance != null))
@@ -347,8 +358,11 @@ class VideoManager(private val svc: BridgeService) {
     }
 
     fun stopMirror() {
+        // A request called off while Android's prompt is up: tapping "Start now" afterwards must not capture anything.
+        val calledOff = consent.cancel()
         releaseConsentWake()   // a cancelled request must not keep the screen on
         val wasRunning = mirrorStream != null
+        if (calledOff && !wasRunning) svc.screenSync.onVideoStopped()   // the session isn't "starting" any more
         if (wasRunning) svc.releaseWake()
         virtualDisplay?.release(); virtualDisplay = null
         appDisplayId = -1
@@ -380,15 +394,27 @@ class VideoManager(private val svc: BridgeService) {
         val pc = Store.load(svc) ?: return
         val cm = svc.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val wanted = if (camFacing == "front") CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
-        val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == wanted }
-            ?: cm.cameraIdList.firstOrNull()
-        if (id == null) {
-            svc.send("webcam.status", JSONObject().put("state", "error").put("message", "No camera found on the phone"))
+        fun refuse(message: String) = svc.send("webcam.status", JSONObject().put("state", "error").put("message", message))
+        // Asking the camera service anything can fail (camera blocked or in a bad state); on the main thread that would
+        // take the whole app down.
+        val found = try {
+            val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == wanted }
+                ?: cm.cameraIdList.firstOrNull()
+            id?.let {
+                val chars = cm.getCameraCharacteristics(it)
+                val sizes = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!.getOutputSizes(MediaCodec::class.java)
+                Triple(it, chars, pickSize(sizes))
+            }
+        } catch (e: Exception) {
+            Log.w(BridgeService.TAG, "camera query failed", e)
+            refuse("Couldn't use the phone's camera: ${e.message ?: e.javaClass.simpleName}")
             return
         }
-        val chars = cm.getCameraCharacteristics(id)
-        val sizes = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!.getOutputSizes(MediaCodec::class.java)
-        val size = pickSize(sizes)
+        if (found == null) {
+            refuse("No camera found on the phone")
+            return
+        }
+        val (id, chars, size) = found
         val sensor = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
         val actualFacing = if (chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"
         val fpsRange = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
@@ -480,7 +506,11 @@ class VideoManager(private val svc: BridgeService) {
     }
 
     fun onStreamFailed(stream: H264Stream) {
-        if (stream === mirrorStream) stopMirror()
+        if (stream === mirrorStream) {
+            stopMirror()
+            // After video.stopped: the PC shows why it ended instead of "stopped on the phone".
+            svc.send("mirror.status", JSONObject().put("state", "error").put("message", "The screen's video connection to the PC failed"))
+        }
         if (stream === camStream) endWebcam("error", "The camera's video connection to the PC failed")
     }
 
@@ -517,10 +547,7 @@ class ScreenCaptureActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        val video = BridgeService.instance?.video
-        // Only the newest prompt may report; an older one (replaced or timed out) must not look like a "declined" answer.
-        if (video != null && video.consentGen == gen) video.onProjectionResult(resultCode, data)
-        else Log.i(BridgeService.TAG, "ignored a stale screen-capture consent result ($resultCode)")
+        BridgeService.instance?.video?.onProjectionResult(gen, resultCode, data)
         finish()
     }
 }

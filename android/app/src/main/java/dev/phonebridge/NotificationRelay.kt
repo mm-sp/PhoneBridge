@@ -14,7 +14,8 @@ import java.io.ByteArrayOutputStream
  * toggle (Settings > Apps > Special access), which MainActivity links to.
  */
 class NotificationRelay : NotificationListenerService() {
-    private val iconCache = HashMap<String, String>()
+    // Filled from the listener's thread and, in sendAll(), from the service's workers.
+    private val iconCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     /** Ids of the notifications this phone has put into a message for the PC. */
     private val sentIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
@@ -31,13 +32,14 @@ class NotificationRelay : NotificationListenerService() {
         if (!relevant(sbn)) return
         val svc = BridgeService.instance ?: return
         val out = outgoing(sbn) ?: return   // blocked / switched off: nothing leaves the phone
-        svc.worker.execute { svc.send("notification.posted", out) }
+        svc.later { svc.send("notification.posted", out) }
     }
 
-    /** False when the PC may learn nothing about this notification: sharing off, denied, or its app blocked. */
+    /** False when the PC may learn nothing about this notification: sharing off, denied (also at an "Ask" prompt), or its
+     *  app blocked. */
     private fun shareable(sbn: StatusBarNotification): Boolean =
         Privacy.notificationsEnabled(this) && PcAccess.mode(this, "notifications") != PcAccess.Mode.DENY &&
-            sbn.packageName !in Privacy.blockedApps(this)
+            BridgeService.instance?.mayShare("notifications") != false && sbn.packageName !in Privacy.blockedApps(this)
 
     /** What the privacy settings allow to be shared for this notification (null = nothing), with text hidden if required. */
     private fun outgoing(sbn: StatusBarNotification): JSONObject? {
@@ -78,7 +80,11 @@ class NotificationRelay : NotificationListenerService() {
             "open" -> runCatching {
                 activeNotifications.firstOrNull { it.key == key }?.notification?.contentIntent?.send()
             }
-            "reply" -> runCatching { reply(key, p.optString("reply_text")) }
+            "reply" -> if (!runCatching { reply(key, p.optString("reply_text")) }.getOrDefault(false)) {
+                // The PC shows the reply as sent: it must hear that it wasn't.
+                BridgeService.instance?.send("error", JSONObject().put("message",
+                    "Your reply wasn't sent: that notification is gone or no longer takes a reply"))
+            }
             else -> {
                 // A notification's own action button, addressed by index.
                 val idx = p.optString("action_id").removePrefix("action:").toIntOrNull() ?: return
@@ -89,14 +95,16 @@ class NotificationRelay : NotificationListenerService() {
         }
     }
 
-    private fun reply(key: String, text: String) {
-        val sbn = activeNotifications.firstOrNull { it.key == key } ?: return
-        val action = sbn.notification.actions?.firstOrNull { a -> a.remoteInputs?.isNotEmpty() == true } ?: return
+    /** True once the reply was handed to the app that posted the notification. */
+    private fun reply(key: String, text: String): Boolean {
+        val sbn = activeNotifications.firstOrNull { it.key == key } ?: return false
+        val action = sbn.notification.actions?.firstOrNull { a -> a.remoteInputs?.isNotEmpty() == true } ?: return false
         val intent = android.content.Intent()
         val bundle = android.os.Bundle()
         action.remoteInputs.forEach { bundle.putCharSequence(it.resultKey, text) }
         android.app.RemoteInput.addResultsToIntent(action.remoteInputs, intent, bundle)
-        action.actionIntent.send(this, 0, intent)
+        action.actionIntent.send(this, 0, intent)   // throws if the app has withdrawn it
+        return true
     }
 
     private fun relevant(sbn: StatusBarNotification): Boolean {
