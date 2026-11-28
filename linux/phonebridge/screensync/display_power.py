@@ -60,10 +60,17 @@ class AdbPowerStrategy:
     def __init__(self, adb: Adb, serial_for: Callable[[], str | None]) -> None:
         self._adb, self._serial_for = adb, serial_for
         self.serial: str | None = None
+        self.off_serial: str | None = None   # the device whose panel was turned off: the one to restore
 
     def _serial(self) -> str | None:
         self.serial = self._serial_for() or self.serial
         return self.serial
+
+    def _restore_serial(self) -> str | None:
+        current = self._serial()   # also (re)connects a configured Wireless Debugging address
+        if self.off_serial and any(d.serial == self.off_serial and d.state == "device" for d in self._adb.devices()):
+            return self.off_serial
+        return current   # the same phone may now be reached another way (USB unplugged, Wireless Debugging left)
 
     def probe(self) -> StepResult:
         if not self._adb.available:
@@ -79,6 +86,7 @@ class AdbPowerStrategy:
         s = self._serial()
         if s is None:
             return StepResult(False, "adb device not found")
+        self.off_serial = s
         rc, out = self._adb.shell(s, "cmd", "display", "power-off", "0")
         if rc != 0:
             return StepResult(False, out.strip()[:200])
@@ -88,7 +96,7 @@ class AdbPowerStrategy:
         return StepResult(True, "panel powered off" if state is False else "power-off sent (state unreadable)")
 
     def restore(self) -> StepResult:
-        s = self._serial()
+        s = self._restore_serial()
         if s is None:
             return StepResult(False, "adb device not found")
         rc, out = self._adb.shell(s, "cmd", "display", "power-reset", "0")
@@ -168,6 +176,8 @@ class DisplayPowerManager:
         self.active: str | None = None
         self.note = "Phone display is on"
         self._unsupported: dict[str, str] = {}   # strategy -> why it failed here; not retried this session
+        self._restores = 0         # counts restore() calls that had something to undo
+        self.interrupted = False   # the last request_off was overtaken (restored or no longer wanted): not a failure
 
     # --- policy ------------------------------------------------------------------------------------------------
     def choose(self, force: bool = False) -> tuple[PowerStrategy | None, str]:
@@ -194,9 +204,15 @@ class DisplayPowerManager:
         return None, "Cannot turn the display off — " + "; ".join(reasons) if reasons else "No screen-off method available"
 
     # --- operations --------------------------------------------------------------------------------------------
-    def request_off(self, reason: str = "mirroring confirmed", force: bool = False) -> bool:
-        """Turns the display off if policy allows. Call only after frames are confirmed. Returns True if it is now off/dimmed."""
+    def request_off(self, reason: str = "mirroring confirmed", force: bool = False,
+                    wanted: Callable[[], bool] = lambda: True, unverifiable: Callable[[], str] = lambda: "") -> bool:
+        """Turns the display off if policy allows. Call only after frames are confirmed. Returns True if it is now off/dimmed.
+        `wanted` says whether the caller still wants it off (the session may end meanwhile); `unverifiable` returns why the
+        stream check could not be made at all, or "" if its answer counts."""
         with self._lock:
+            self.interrupted = not wanted()
+            if self.interrupted:
+                return False
             if self.state in (DisplayState.OFF, DisplayState.DIMMED):
                 return True
             strat, why = self.choose(force)
@@ -219,15 +235,26 @@ class DisplayPowerManager:
                 except Exception:  # noqa: BLE001 - a safety net must never break the feature it protects
                     log.exception("display watchdog failed to start")
             self._set(DisplayState.OFF if strat.real_off else DisplayState.DIMMED, f"{reason} ({r.detail})")
+            restores = self._restores
         # Verify outside the lock: the stream must survive the panel going off.
-        if not self._verify_stream():
-            log.error("stream stopped after display %s; reverting", strat.name)
-            with self._lock:
+        alive = self._verify_stream()
+        with self._lock:
+            # Restored or given up while checking: the answer says nothing about this method.
+            self.interrupted = self._restores != restores or not wanted()
+            if self.interrupted:
+                if self._restores == restores:
+                    self.restore("no longer wanted")
+                return False
+            if alive:
+                return True
+            why = unverifiable()
+            if not why:
+                why = f"{strat.name}: mirroring stopped when the display went off"
                 self._unsupported[strat.name] = "mirroring stopped when the display went off"
-            self.restore("stream stalled after screen-off")
-            self._set(DisplayState.ON, f"{strat.name}: mirroring stopped when the display went off, so it was turned back on")
+            log.error("stream not confirmed after display %s; reverting (%s)", strat.name, why)
+            if self.restore("stream not confirmed after screen-off"):
+                self._set(DisplayState.ON, f"{why}, so it was turned back on")
             return False
-        return True
 
     def _verify_stream(self) -> bool:
         """`verify(timeout)` must PROVE the stream is live with the panel off (it provokes a content change and waits for
@@ -253,19 +280,26 @@ class DisplayPowerManager:
             marker = self.pending.read()
             if self.state == DisplayState.ON and self.active is None and marker is None:
                 return True
+            self._restores += 1
             name = self.active or (marker or {}).get("strategy")
             primary = self._strategies.get(name)
+            if marker and marker.get("serial") and hasattr(primary, "off_serial"):
+                primary.off_serial = str(marker["serial"])
             if primary is not None:
-                # The method that turned it off first; if it cannot, every other method is tried as a last resort.
+                # The method that turned it off first; if it cannot, every other method is tried as a last resort. A
+                # powered-off panel counts as restored only by a method that can power it: asking the phone to undo a
+                # dim only means the request was sent.
                 order = [primary] + [s for s in self._strategies.values() if s is not primary]
                 ok = False
                 for strat in order:
-                    if self._restore_with(strat).ok:
+                    if self._restore_with(strat).ok and (strat.real_off or not primary.real_off):
                         ok = True
                         break
             else:
                 # Unknown method (marker without one): undo with all of them.
-                ok = any([self._restore_with(s).ok for s in self._strategies.values()])
+                done = [(s, self._restore_with(s).ok) for s in self._strategies.values()]
+                need_real = any(s.real_off for s, _ok in done)
+                ok = any(result and (s.real_off or not need_real) for s, result in done)
             if ok:
                 self.pending.clear()
                 self.active = None

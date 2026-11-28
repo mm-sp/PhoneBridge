@@ -437,6 +437,15 @@ def t_reliability():
     r.clk.advance(61); r.ctl.tick()
     check("capture prompt never accepted -> ERROR with explanation, display untouched", r.ctl.sm.state == State.ERROR and "frames" in r.ctl.note and r.phone.panel_on)
     check("ERROR session can be retried", r.ctl.start_mirroring(Origin.AUTO) in ("starting", "launching") and r.ctl.sm.state == State.MIRROR_STARTING)
+    r = Rig()
+    r.ctl.on_link_change(True); r.ctl.start_mirroring(Origin.AUTO)
+    r.ctl.on_phone_status("Tap the PhoneBridge notification on your phone to allow screen sharing")
+    r.clk.advance(61); r.ctl.tick()
+    check("…with what the phone said it was waiting for", r.ctl.sm.state == State.ERROR
+          and "frames" in r.ctl.note and "Tap the PhoneBridge notification" in r.ctl.note)
+    r.ctl.start_mirroring(Origin.AUTO); r.clk.advance(61); r.ctl.tick()
+    check("…and an earlier attempt's words are not repeated for the next", "Tap the" not in r.ctl.note
+          and "accepted?" in r.ctl.note)
     # stall while dark
     r = Rig()
     r.ctl.on_link_change(True); r.ctl.start_mirroring(Origin.AUTO); r.frames(12); r.ctl.tick()
@@ -490,6 +499,123 @@ def t_reliability():
     check("FrameStats confirms after a few frames even if the screen then goes still", fs.confirmed())
 
 
+def t_display_races():
+    print("8b. screen-off overtaken by the session, unverifiable streams, restores that cannot be done")
+
+    def during_check(r, action):
+        """A mirroring session where `action` happens while the PC checks the stream with the panel just turned off."""
+        real = r.ctl.verify_stream
+
+        def verify(timeout):
+            if r.dm.state == DisplayState.OFF:
+                r.ctl.verify_stream = real
+                action()
+            return real(timeout)
+        r.ctl.verify_stream = verify
+        r.ctl.on_link_change(True); r.ctl.start_mirroring(Origin.AUTO); r.frames(12); r.ctl.tick()
+
+    notes = []
+    r = Rig(); r.ctl.h.notify = notes.append
+    during_check(r, lambda: r.ctl.stop_mirroring("user"))
+    check("stop during the check: panel on, session over, nothing reported", r.phone.panel_on
+          and r.ctl.sm.state == State.DISCONNECTED and not notes and r.pend.read() is None)
+    r.ctl.start_mirroring(Origin.AUTO); r.frames(12); r.ctl.tick()
+    check("…and the next session turns the screen off as usual", r.ctl.sm.state == State.DISPLAY_OFF and not r.phone.panel_on)
+
+    r = Rig()
+    during_check(r, lambda: r.ctl.on_link_change(False))
+    check("link lost during the check: panel on, reconnecting", r.phone.panel_on and r.ctl.sm.state == State.RECONNECTING)
+    r.ctl.on_link_change(True); r.frames(12); r.ctl.tick()
+    check("…and the resumed session turns the screen off again", r.ctl.sm.state == State.DISPLAY_OFF and not r.phone.panel_on)
+
+    r = Rig(); r.ctl.h.notify = notes.append
+    during_check(r, lambda: r.ctl.set_display(True))
+    check("“turn screen on” during the check: the PC does not claim the screen is off", r.phone.panel_on
+          and r.ctl.sm.state == State.MIRROR_ACTIVE and r.dm.state == DisplayState.ON and not notes
+          and not r.cmds("DISPLAY_OFF"))
+    r.ctl.set_display(False)
+    check("…and it can be turned off again", r.ctl.sm.state == State.DISPLAY_OFF and not r.phone.panel_on)
+
+    r = Rig()
+    r.ctl.on_link_change(True); r.ctl.start_mirroring(Origin.AUTO)
+    real_bg, queued = r.ctl.h.run_bg, []
+    r.ctl.h.run_bg = queued.append
+    r.frames(12); r.ctl.tick()                      # screen-off queued, not yet run
+    r.ctl.h.run_bg = real_bg
+    r.ctl.stop_mirroring("user")
+    for fn in queued:
+        fn()
+    check("a screen-off that starts after the session ended does nothing", r.phone.panel_on and not r.pend.read()
+          and not any(c[-3:] == ["display", "power-off", "0"] for c in r.phone.calls))
+
+    r = Rig(); r.probe_dead = True
+    real_send = r.ctl.h.send
+
+    def no_overlay(t, p):
+        if t == C.TYPE_COMMAND and p["cmd"] == "CONNECTION_STATUS" and p["args"].get("probe_content"):
+            r.ctl.on_envelope(C.TYPE_ACK, C.ack_payload(p["command_id"], True, "probe_unavailable"))
+        return real_send(t, p)
+    r.ctl.h.send = no_overlay
+    r.ctl.on_link_change(True); r.ctl.start_mirroring(Origin.AUTO); r.frames(12); r.ctl.tick()
+    check("phone cannot probe: screen back on, and the PC says which phone permission is missing", r.phone.panel_on
+          and "Display over other apps" in r.ctl.snapshot()["note"] and "stopped" not in r.ctl.snapshot()["note"])
+    r.probe_dead = False
+    r.ctl.h.send = real_send
+    r.ctl.set_display(False)
+    check("…once the probe works, the screen goes off", r.ctl.sm.state == State.DISPLAY_OFF and not r.phone.panel_on)
+
+    # the stream dies and adb is gone: the screen cannot be turned back on
+    ph = FakePhone()
+    dead = {"v": False}
+    dm, pend, _ = make_display(ph, verify=lambda t: dead.update(v=True) or False)
+    dm._strategies["adb"]._adb = Adb(runner=lambda a, t: (1, "error: device offline") if dead["v"] else ph(a, t),
+                                     adb_path="/x")
+    check("failed check with a failed restore never reports the screen as turned back on", not dm.request_off()
+          and dm.state != DisplayState.ON and "turned back on" not in dm.note and "power button" in dm.note
+          and pend.read() is not None)
+    notes = []
+    r = Rig(); r.ctl.h.notify = notes.append
+
+    def lose_adb():
+        r.probe_dead = True
+        r.dm._strategies["adb"]._adb = Adb(runner=lambda a, t: (1, "error: device offline"), adb_path="/x")
+    during_check(r, lose_adb)
+    check("…and the user is told to press the power button", any("power button" in n for n in notes))
+
+    # a powered-off panel is not "restored" by asking the phone to undo a dim
+    ph = FakePhone(); sent = []
+    dim = PhoneDimStrategy(lambda on: sent.append(on) or True, lambda: True)
+    dm, pend, _ = make_display(ph, extra=[dim])
+    dm.request_off()
+    good = dm._strategies["adb"]._adb
+    dm._strategies["adb"]._adb = Adb(runner=lambda a, t: (1, "error: device offline"), adb_path="/x")
+    check("adb gone: the phone is asked too, but the panel is not reported restored", not dm.restore("x")
+          and sent == [True] and pend.read() is not None and dm.state == DisplayState.OFF)
+    dm._strategies["adb"]._adb = good
+    check("…until adb can restore it", dm.restore("y") and ph.panel_on and pend.read() is None)
+
+    # after a restart the recorded device is restored, not whichever one the PC would pick now
+    tmp = tempfile.mkdtemp()
+    ph = FakePhone(serial="DARK1")
+    dm1, pend, _ = make_display(ph, tmp=tmp)
+    dm1.request_off()
+    other_calls = []
+
+    def two(args, timeout):
+        if args[1:] == ["devices"]:
+            return 0, "List of devices attached\nOTHER\tdevice\nDARK1\tdevice\n"
+        if args[1:3] == ["-s", "OTHER"]:
+            other_calls.append(args)
+            return 0, ""
+        return ph(args, timeout)
+    fresh_adb = Adb(runner=two, adb_path="/x")
+    fresh = DisplayPowerManager(strategies=[AdbPowerStrategy(fresh_adb, lambda: "OTHER")],
+                                mode=lambda: SmartScreenMode.ENABLED, auto_off=lambda: True, pending=pend,
+                                sleep=lambda s: None)
+    check("crash recovery restores the device named in the marker", fresh.recover_stale() and ph.panel_on
+          and not any("power-reset" in c for c in other_calls) and pend.read() is None)
+
+
 def t_settings():
     print("9. settings persistence")
     from phonebridge.screensync import settings as S
@@ -508,7 +634,8 @@ def t_settings():
 
 
 if __name__ == "__main__":
-    for t in (t_states, t_commands, t_launch, t_display, t_pc_to_phone, t_phone_to_pc, t_toggles, t_reliability, t_settings):
+    for t in (t_states, t_commands, t_launch, t_display, t_pc_to_phone, t_phone_to_pc, t_toggles, t_reliability,
+              t_display_races, t_settings):
         t()
     print(f"\n{PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

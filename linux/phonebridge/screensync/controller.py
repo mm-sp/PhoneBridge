@@ -56,12 +56,6 @@ class FrameStats:
         self.last = 0.0
         self.bytes = 0
 
-    def on_mirror_error(self, message: str) -> None:
-        """The phone refused or failed to start the capture (prompt declined, permission missing...)."""
-        with self._lock:
-            if self.sm.state in (State.MIRROR_STARTING, State.APP_LAUNCHING, State.AUTHENTICATING):
-                self._fail(message or "the phone could not start screen capture")
-
     def on_frame(self, nbytes: int = 0) -> None:
         now = self._clock()
         self._times.append(now)
@@ -133,6 +127,7 @@ class ScreenSyncController:
         self._probe_fails = 0
         self._probing = False
         self._probe_unavailable = False
+        self._phone_says = ""
         self.phone_supports_dim = False
         self.sm.add_listener(lambda *_: self.h.on_update())
 
@@ -192,6 +187,8 @@ class ScreenSyncController:
         if not self.sm.transition(State.MIRROR_STARTING, "starting screen capture"):
             return "invalid_state"
         self.stats.reset()
+        self._probe_fails = 0
+        self._phone_says = ""
         self._phase_start = self._clock()
         self._deadline = self._phase_start + MIRROR_START_TIMEOUT_S
         self._send_cmd(C.make(Cmd.START_MIRRORING, self.session_id, Origin.USER))
@@ -208,6 +205,7 @@ class ScreenSyncController:
                     self.sm.transition(State.DISCONNECTED, "manual start")
                 self.session_id = C.new_id()
                 self.stats.reset()
+                self._phone_says = ""
                 if self.sm.transition(State.AUTHENTICATING, "manual start"):
                     self.sm.transition(State.MIRROR_STARTING, "manual start")
                     self._phase_start = self._clock()
@@ -252,7 +250,7 @@ class ScreenSyncController:
     def set_display(self, on: bool) -> str:
         """Manual 'Turn screen on/off' button. An explicit click overrides the automatic toggle."""
         if on:
-            self._restore_display_then(lambda: self._display_back())
+            self._restore_display_then(lambda: self._display_back(), "the phone display was turned on")
             return "restoring"
         if self.sm.state not in (State.MIRROR_ACTIVE, State.DISPLAY_OFF):
             return "not_mirroring"
@@ -327,6 +325,12 @@ class ScreenSyncController:
             if self.sm.state in (State.MIRROR_STARTING, State.APP_LAUNCHING, State.AUTHENTICATING):
                 self._fail(message or "the phone could not start screen capture")
 
+    def on_phone_status(self, message: str) -> None:
+        """What the phone is waiting for while the capture starts ("Tap the notification…"): the best explanation there
+        is if no picture ever arrives."""
+        if self.sm.state in (State.MIRROR_STARTING, State.APP_LAUNCHING, State.AUTHENTICATING):
+            self._phone_says = message.strip()[:200]
+
     def on_frame(self, nbytes: int = 0) -> None:
         self.stats.on_frame(nbytes)
 
@@ -365,7 +369,8 @@ class ScreenSyncController:
                     if self.settings.auto_screen_off:
                         self._try_display_off()
                 elif now > self._deadline:
-                    self._fail("no screen frames arrived (was the capture prompt on the phone accepted?)")
+                    self._fail("no screen frames arrived " + (f"(the phone last said: {self._phone_says})" if self._phone_says
+                                                              else "(was the capture prompt on the phone accepted?)"))
             elif st == State.DISPLAY_OFF and now >= self._next_probe and not self._probing:
                 self._next_probe = now + PROBE_PERIOD_S
                 self._probing = True
@@ -410,6 +415,8 @@ class ScreenSyncController:
             if self.verify_stream(5.0):
                 self._probe_fails = 0
                 return
+            if self.sm.state != State.DISPLAY_OFF:
+                return   # the session moved on while we were waiting: not a failed probe
             self._probe_fails += 1
             log.warning("stream liveness probe %d/%d failed with the display off", self._probe_fails, PROBE_FAILS_TO_RESTORE)
             if self._probe_fails >= PROBE_FAILS_TO_RESTORE:
@@ -425,26 +432,38 @@ class ScreenSyncController:
             return
         self._display_busy = True
 
+        sid = self.session_id
+
+        def wanted() -> bool:
+            return self.session_id == sid and self.sm.state in (State.MIRROR_ACTIVE, State.DISPLAY_OFF)
+
+        def unverifiable() -> str:
+            return ("The stream could not be checked with the screen off (allow “Display over other apps” for "
+                    "PhoneBridge on the phone)" if self._probe_unavailable else "")
+
         def work() -> None:
             try:
-                ok = self.display.request_off("mirroring confirmed", force=force)
+                ok = self.display.request_off("mirroring confirmed", force=force, wanted=wanted,
+                                              unverifiable=unverifiable)
+                failed = not ok and not self.display.interrupted
                 with self._lock:
                     if ok and self.sm.state == State.MIRROR_ACTIVE:
                         self.sm.transition(State.DISPLAY_OFF, self.display.note)
                         self._send_cmd(C.make(Cmd.DISPLAY_OFF, self.session_id, Origin.AUTO,
                                               {"performed": True, "mode": self.display.active or ""}))
-                    elif not ok:
+                    elif failed:
                         self.note = self.display.note
-                if not ok and force:   # the user clicked: tell them why nothing happened, not just a dim label
+                # The user clicked, or the screen is stuck off: say why, not just a dim label.
+                if failed and (force or self.display.state != DisplayState.ON):
                     self.h.notify(self.display.note[:300] or "The phone screen could not be turned off")
             finally:
                 self._display_busy = False
                 self.h.on_update()
         self.h.run_bg(work)
 
-    def _restore_display_then(self, then: Callable[[], None]) -> None:
+    def _restore_display_then(self, then: Callable[[], None], reason: str = "session ended") -> None:
         def work() -> None:
-            ok = self.display.restore("session ended")
+            ok = self.display.restore(reason)
             if not ok:
                 self.h.notify("Could not turn the phone display back on — press its power button")
             then()

@@ -79,7 +79,11 @@ for the actual capture and remote control.
 ### Display safety
 Display is touched only after frames are confirmed. After power-off the PC **proves** the stream is live by asking the phone
 to flicker a 1-pixel overlay and waiting for a frame (a still screen sends no frames, so silence proves nothing). Failure →
-panel restored, device not retried this session. Restored on: stop, error, video stopped on phone, link loss (PC via ADB *and*
+panel restored, device not retried this session (a check that could not be made because the phone lacks "Display over
+other apps", or that the session ending or "Turn screen on" overtook, is not held against the device). If ADB cannot be
+reached to restore a powered-off panel, the marker is kept and the user is told to press the power button: a request to
+the phone alone does not count as restored. A restore uses the ADB device named in the marker when it is attached.
+Restored on: stop, error, video stopped on phone, link loss (PC via ADB *and*
 the phone by itself via `DisplayPower.restore`), window close, process restart (marker / persisted flag). While dark it re-probes
 every 20 s; two failures restore the panel.
 
