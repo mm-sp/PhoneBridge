@@ -111,6 +111,11 @@ class PhotosPage(Gtk.Box, LoadingMixin):
         self._open_when_saved.discard(photo_id)
         self._status_row.set_label(f"Download failed: {reason}")
 
+    def request_failed(self, photo_id: str, reason: str) -> None:
+        """The phone couldn't send a photo asked for here (nothing to say about one that isn't waited for)."""
+        if photo_id in self._open_when_saved:
+            self.download_failed(photo_id, reason)
+
     def set_photos(self, payload: dict) -> None:
         if payload.get("offset", 0) != self._loaded:
             return  # stale page (e.g. after a reload)

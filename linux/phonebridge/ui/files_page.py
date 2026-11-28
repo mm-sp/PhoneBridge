@@ -147,6 +147,14 @@ class FilesPage(Gtk.Box, LoadingMixin):
             self._open_when_saved.discard(key[len("get:"):])
             self._update_transfer(key, f"Failed: {message}", None)
 
+    def request_failed(self, phone_path: str, message: str) -> None:
+        """The phone couldn't send a file asked for here. A transfer that has started reports itself (and a cancelled one
+        stays cancelled), so only a row still waiting changes."""
+        key = f"get:{phone_path}"
+        row = self._transfer_rows.get(key)
+        if row is not None and row[0].get_subtitle() == REQUESTING:
+            self.download_refused(phone_path, message)
+
     def set_listing(self, payload: dict) -> None:
         # Only the folder this page asked for: the mounted phone folder (phone_fs.py) receives listings too, and a late
         # answer for a folder already left must not pull the view back.
