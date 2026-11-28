@@ -66,6 +66,7 @@ class _Inbound:
     cancelled: bool = False
     writer: object = None
     session_id: str | None = None   # the control session the offer arrived on
+    replaced: bool = False   # a retry for the same phone file took over: its outcome is the one to report
     done: asyncio.Future = field(default_factory=lambda: asyncio.get_running_loop().create_future())
 
 
@@ -150,7 +151,7 @@ def _safe_key(key: str) -> str:
     return "".join(ch for ch in key if ch.isalnum())[:40]
 
 
-def _claim_part(dest_dir: Path, key: str, tid: str, session_id: str | None) -> tuple[Path, bool]:
+def _claim_part(dest_dir: Path, key: str, tid: str, session_id: str | None, source_path) -> tuple[Path, bool]:
     """(partial file, may a later attempt resume it) for a new incoming transfer. Two transfers must never write one
     partial: each checks only the bytes it received, so the mix would be saved as a good file."""
     part = dest_dir / f".pb-{key}.part"
@@ -161,6 +162,7 @@ def _claim_part(dest_dir: Path, key: str, tid: str, session_id: str | None) -> t
             return dest_dir / f".pb-{key}-{_safe_key(tid)}.part", False
         # Left over from a link that has since been replaced: this is the retry, so end the old one and resume.
         other.cancelled = True
+        other.replaced = bool(source_path) and other.payload.get("source_path") == source_path
         if other.writer is not None:
             other.writer.close()
         other.done.set_exception(TransferError("the connection to the phone was lost"))
@@ -275,7 +277,7 @@ async def accept_offer(conn: DeviceConnection, envelope, dest_dir: Path, on_prog
     purge_stale_partials(dest_dir)
     key = _safe_key(str(p.get("resume_key", ""))) or _safe_key(tid)
     session_id = getattr(conn, "session_id", None)
-    part, resumable = _claim_part(dest_dir, key, tid, session_id)
+    part, resumable = _claim_part(dest_dir, key, tid, session_id, p.get("source_path"))
     offset = part.stat().st_size if part.exists() else 0
     if offset >= size:  # stale/complete leftovers: start over
         part.unlink(missing_ok=True)
@@ -305,7 +307,8 @@ async def accept_offer(conn: DeviceConnection, envelope, dest_dir: Path, on_prog
             log.warning("incoming transfer %s failed: %s", p.get("filename"), exc)
             if not resumable:
                 part.unlink(missing_ok=True)   # no later attempt would look for it
-            failed(str(exc) or "transfer failed")
+            if not inb.replaced:   # else whoever waits for that file is now waiting for the retry
+                failed(str(exc) or "transfer failed")
         finally:
             _IN.pop(tid, None)
 
@@ -443,7 +446,7 @@ def _fail_fetch(payload: dict, reason: str) -> None:
 
 
 def register(server, dest_dir_for, on_progress_for=None, on_done=None, on_failed=None) -> None:
-    """Wires file.offer / file.reject / file.cancel / permission.denied into a ControlChannelServer.
+    """Wires file.offer / file.reject / file.cancel / permission.denied / error into a ControlChannelServer.
     dest_dir_for(payload) -> Path; on_progress_for(payload) -> callable|None; on_done(path, size, payload);
     on_failed(payload, reason) for an incoming file that won't arrive."""
 
@@ -473,6 +476,13 @@ def register(server, dest_dir_for, on_progress_for=None, on_done=None, on_failed
     async def denied(conn, envelope) -> None:
         on_denied(conn, envelope)
 
+    async def error(_conn, envelope) -> None:
+        # The phone couldn't send a file the mounted folder is waiting for (files.get): end that wait now.
+        p = envelope.payload
+        if p.get("source_path"):
+            _fail_fetch(p, str(p.get("message") or "the phone couldn't send the file"))
+
+    server.on("error", error)
     server.on("file.cancel", cancel)
     server.on("file.offer", offer)
     server.on("file.reject", reject)

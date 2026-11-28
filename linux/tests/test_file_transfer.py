@@ -480,6 +480,46 @@ async def main_async() -> int:
     w1.close()
     await asyncio.sleep(0.3)
     check("…then completes intact", verdict == b"OK" and (dest_pc / "again.bin").read_bytes() == twice)
+    check("…and, as it had no row or reader in common with the retry, the stuck one was reported",
+          await reason_for("again.bin") == ["the connection to the phone was lost"] * 2)
+
+    async def offer_fetch(tid_x: str) -> None:
+        await phone.send("file.offer", {"transfer_id": tid_x, "filename": "mounted.bin", "size": len(twice),
+                                        "mime": "x/y", "resume_key": "fetchkey", "data_conn": True,
+                                        "source_path": "/DCIM/mounted.bin"})
+
+    cache = work / "mount-cache"
+    file_transfer.expect_fetch("/DCIM/mounted.bin", cache)
+    await offer_fetch("m" * 32)
+    await asyncio.wait_for(phone.recv(), 5)
+    r1, w1 = await phone.data_connection("m" * 32, 0)
+    await upload(r1, w1, 0, CHUNK)
+    await asyncio.sleep(0.4)
+    phone.w.close()
+    await asyncio.sleep(0.3)
+    await phone.connect()
+    await asyncio.sleep(0.3)
+    waiting = file_transfer.expect_fetch("/DCIM/mounted.bin", cache)   # the file is asked for again
+    await offer_fetch("n" * 32)
+    await asyncio.wait_for(phone.recv(), 5)
+    await asyncio.sleep(0.3)
+    check("ending the stuck transfer doesn't fail the reader waiting for its retry", not waiting.done())
+    r2, w2 = await phone.data_connection("n" * 32, CHUNK)
+    await upload(r2, w2, CHUNK)
+    await asyncio.wait_for(phone.read_frame(r2), 5)
+    w1.close()
+    w2.close()
+    await asyncio.wait({waiting}, timeout=5)
+    check("…who gets the whole file from the retry", waiting.done() and waiting.exception() is None
+          and waiting.result().read_bytes() == twice)
+
+    print("7h. the phone can't send a file the mounted folder is waiting for")
+    waiting = file_transfer.expect_fetch("/DCIM/locked.bin", cache)
+    await phone.send("error", {"message": "something unrelated"})
+    await phone.send("error", {"message": "locked.bin is not a file", "source_path": "/DCIM/locked.bin"})
+    await asyncio.wait({waiting}, timeout=5)
+    check("the wait ends at once with the phone's reason",
+          waiting.done() and str(waiting.exception()) == "locked.bin is not a file")
     conn = server.get_connection(device.fingerprint)
 
     print("8. data connection without the key is dropped")
