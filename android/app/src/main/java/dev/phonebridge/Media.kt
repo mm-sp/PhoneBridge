@@ -47,6 +47,12 @@ object Transfer {
         notifyPc?.send("file.cancel", JSONObject().put("transfer_id", id))
     }
 
+    /** Which partial file each incoming transfer writes. */
+    val parts = PartFiles()
+
+    /** Closes a transfer's data connection without cancelling it (its partial file belongs to a newer attempt now). */
+    fun drop(id: String) { active[id]?.close() }
+
     fun isCancelled(id: String) = id in cancelled
     fun register(id: String, dc: Connection) { active[id] = dc }
     fun unregister(id: String) { active.remove(id); cancelled.remove(id) }
@@ -173,10 +179,11 @@ object Photos {
                 mime = c.getString(2) ?: mime
             }
         }
+        fun unreadable(): Nothing = throw java.io.IOException("the phone can't read that photo (was it deleted?)")
         if (size <= 0) {
-            size = svc.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: return
+            size = svc.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: unreadable()
         }
-        val input = svc.contentResolver.openInputStream(uri) ?: return
+        val input = svc.contentResolver.openInputStream(uri) ?: unreadable()
         Transfer.send(svc, input, name, size, mime, JSONObject().put("photo_id", id))
     }
 }
@@ -219,10 +226,7 @@ object Files {
 
     fun sendFile(svc: BridgeService, rel: String) {
         val f = resolve(rel)
-        if (!f.isFile) {
-            svc.send("error", JSONObject().put("message", "${f.name} is not a file"))
-            return
-        }
+        if (!f.isFile) throw java.io.IOException("${f.name} is not a file, or the phone can't read it")
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"
         Transfer.send(svc, f.inputStream(), f.name, f.length(), mime, JSONObject().put("source_path", rel), f.lastModified())
     }
@@ -249,8 +253,12 @@ object Files {
         if (size > destDir.usableSpace - reserve || size > Transfer.partDir(svc).usableSpace - reserve) {
             reject("not enough free space on the phone"); return
         }
-        val key = offer.optString("resume_key").filter { it.isLetterOrDigit() }.take(40).ifEmpty { tid }
-        val part = File(Transfer.partDir(svc), ".pb-$key.part")
+        val parts = Transfer.parts
+        val claimed = parts.claim(Transfer.partDir(svc), offer.optString("resume_key"), tid,
+            svc.connection()?.session?.sessionId ?: "")
+        claimed.displaced?.let { Transfer.drop(it.transferId) }
+        val claim = claimed.claim
+        val part = claim.file
         var offset = if (part.exists()) part.length() else 0L
         if (offset >= size) { part.delete(); offset = 0L }
 
@@ -273,37 +281,32 @@ object Files {
                         if (Transfer.isCancelled(tid)) throw java.io.IOException("cancelled")
                         if (received + chunk.size > size) throw java.io.IOException("PC sent more than it offered")
                         md.update(chunk)
-                        out.write(chunk)
+                        parts.whileHeld(claim) { out.write(chunk) }
                         received += chunk.size
                     }
                 }
                 val ok = String(dc.recvRaw()) == "SHA256:" + Transfer.hex(md.digest())
                 dc.sendRaw((if (ok) "OK" else "BAD").toByteArray())
-                if (!ok) { part.delete(); throw java.io.IOException("checksum mismatch") }
+                if (!ok) { parts.whileHeld(claim) { part.delete() }; throw java.io.IOException("checksum mismatch") }
             } finally { dc.close() }
-            var d = File(destDir, name)
-            var n = 1
-            while (d.exists()) {
-                d = File(destDir, "${name.substringBeforeLast('.')} ($n)${if (name.contains('.')) "." + name.substringAfterLast('.') else ""}")
-                n++
-            }
-            // The partial is app-private, so moving it into the shared folder is a copy; only then is the partial removed.
-            try {
-                part.copyTo(d, overwrite = false)
+            // The partial is app-private, so moving it into the shared folder is a copy; only then is it removed.
+            val verified = parts.seal(claim)
+            dest = try {
+                PartFiles.saveCopy(verified, destDir, name)
             } catch (e: Exception) {
                 throw java.io.IOException("couldn't save $name — allow Storage permission for PhoneBridge")
-            }
-            part.delete()
-            dest = d
+            } finally { verified.delete() }
         } catch (e: Exception) {
-            if (Transfer.isCancelled(tid)) {
-                part.delete()   // cancelled on purpose: nothing to resume
-            } else {
-                // The partial file stays so the next attempt resumes where this one stopped.
+            if (!parts.holds(claim)) return   // a newer attempt took this one over and reports its own outcome
+            val cancelled = Transfer.isCancelled(tid)
+            // Cancelled on purpose, or a partial no later attempt would look for: nothing to resume. Otherwise the
+            // partial file stays so the next attempt resumes where this one stopped.
+            if (cancelled || !claim.resumable) part.delete()
+            if (!cancelled) {
                 svc.send("error", JSONObject().put("message", "Transfer of $name failed: ${e.message}").put("transfer_id", tid))
             }
             return
-        } finally { svc.releaseWake(); Transfer.unregister(tid) }
+        } finally { parts.release(claim); svc.releaseWake(); Transfer.unregister(tid) }
         val saved = dest ?: return
         MediaScannerConnection.scanFile(svc, arrayOf(saved.path), null, null)
         svc.main.post {
