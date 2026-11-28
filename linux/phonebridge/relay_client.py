@@ -30,18 +30,34 @@ RETRY_SECONDS = 5.0        # first wait before a failed parked connection is ret
 DEFAULT_PORT = 28200
 
 
+def parse_address(text: str) -> tuple[str, int]:
+    """(host, port) from "host[:port]"; ValueError, worded for the person who typed it, if it isn't one."""
+    host, colon, port_text = text.strip().partition(":")
+    host, port_text = host.strip(), port_text.strip()
+    if not host or any(c.isspace() or c == "/" for c in host):
+        raise ValueError("Enter the relay as host or host:port, e.g. relay.example.com:28200")
+    if colon and port_text and not (port_text.isascii() and port_text.isdigit()):
+        raise ValueError("The port must be a number, e.g. relay.example.com:28200")
+    port = int(port_text) if port_text else DEFAULT_PORT
+    if not 0 < port < 65536:
+        raise ValueError("The port must be between 1 and 65535")
+    return host, port
+
+
 def load_config() -> tuple[str, int] | None:
-    """(host, port) from $PHONEBRIDGE_RELAY ("host[:port]") or ~/.config/phonebridge/relay.json; None = relay off."""
+    """(host, port) from $PHONEBRIDGE_RELAY ("host[:port]") or ~/.config/phonebridge/relay.json; None = relay off.
+    A setting that is not a usable address leaves the relay off (with a warning) instead of stopping the app."""
     env = os.environ.get("PHONEBRIDGE_RELAY", "").strip()
-    if env:
-        host, _, port = env.partition(":")
-        return host, int(port or DEFAULT_PORT)
     try:
+        if env:
+            return parse_address(env)
         obj = json.loads(CONFIG_PATH.read_text())
-        if obj.get("host"):
-            return str(obj["host"]), int(obj.get("port") or DEFAULT_PORT)
-    except (OSError, ValueError):
+        if isinstance(obj, dict) and obj.get("host"):
+            return parse_address(f"{obj['host']}:{obj.get('port') or DEFAULT_PORT}")
+    except FileNotFoundError:
         pass
+    except (OSError, ValueError) as exc:
+        log.warning("relay setting ignored: %s", exc)
     return None
 
 

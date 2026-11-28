@@ -194,6 +194,30 @@ async def main_async() -> int:
     parked[1][1].close()
     other.server.close()
 
+    print("9. relay addresses that are not usable")
+
+    def parsed(text):
+        try:
+            return relay_client.parse_address(text)
+        except ValueError:
+            return None
+
+    check("host and host:port are understood", parsed(" relay.example.com ") == ("relay.example.com", 28200)
+          and parsed("relay.example.com:4000") == ("relay.example.com", 4000) and parsed("10.0.0.2:") == ("10.0.0.2", 28200))
+    bad = (":28200", "host:0", "host:65536", "host:99999999", "host:-1", "host:abc", "host:²", "https://relay.example.com",
+           "two words", "")
+    check("anything else is refused", [t for t in bad if parsed(t) is not None] == [])
+    for text in ("host:abc", "host:70000", ":1"):
+        os.environ["PHONEBRIDGE_RELAY"] = text
+        check(f"PHONEBRIDGE_RELAY={text!r} leaves the relay off instead of failing", relay_client.load_config() is None)
+    del os.environ["PHONEBRIDGE_RELAY"]
+    relay_client.CONFIG_PATH = tmp / "relay.json"
+    for stored in ('[1]', '"x"', '{"host": "h", "port": "abc"}', '{"host": "h", "port": 70000}', "{nonsense"):
+        relay_client.CONFIG_PATH.write_text(stored)
+        check(f"stored setting {stored} leaves the relay off", relay_client.load_config() is None)
+    relay_client.save_config("relay.example.com", 4000)
+    check("a saved setting is read back", relay_client.load_config() == ("relay.example.com", 4000))
+
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
