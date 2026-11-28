@@ -34,11 +34,11 @@ class Calls(private val svc: BridgeService) {
             if (!number.isNullOrBlank()) currentNumber = number
             val names = ContactNames(svc)
             when (state) {
-                TelephonyManager.CALL_STATE_RINGING -> svc.worker.execute {
+                TelephonyManager.CALL_STATE_RINGING -> svc.later {
                     svc.send("call.ringing", JSONObject().put("number", currentNumber)
                         .put("caller_name", names.lookup(currentNumber) ?: ""))
                 }
-                TelephonyManager.CALL_STATE_OFFHOOK -> svc.worker.execute {
+                TelephonyManager.CALL_STATE_OFFHOOK -> svc.later {
                     svc.send("call.state", JSONObject().put("state", "active").put("number", currentNumber)
                         .put("caller_name", names.lookup(currentNumber) ?: "")
                         .put("direction", if (lastState == TelephonyManager.CALL_STATE_RINGING) "incoming" else "outgoing"))
@@ -48,7 +48,7 @@ class Calls(private val svc: BridgeService) {
                     currentNumber = ""
                     runCatching { audio.isMicrophoneMute = false }
                     // The call log row is written a moment after the call ends.
-                    svc.main.postDelayed({ svc.worker.execute { runCatching { svc.send("calls.history", history(0, 20)) } } }, 2000)
+                    svc.main.postDelayed({ svc.later { runCatching { svc.send("calls.history", history(0, 20)) } } }, 2000)
                 }
             }
             lastState = state
