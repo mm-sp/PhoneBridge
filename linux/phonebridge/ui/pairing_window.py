@@ -6,6 +6,8 @@ desktop with `gtk4`/`libadwaita`/`python3-gobject` installed to confirm layout/r
 """
 from __future__ import annotations
 
+import logging
+import shutil
 import tempfile
 import threading
 import time
@@ -18,6 +20,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from .. import bluetooth_transport, netutil, pairing, qr, wifi_pairing
+
+log = logging.getLogger("phonebridge.pairing_window")
 
 
 class PairingWindow(Adw.Window):
@@ -97,11 +101,15 @@ class PairingWindow(Adw.Window):
         )
         payload = self._pending.qr_payload()
 
-        tmp_dir = Path(tempfile.mkdtemp(prefix="phonebridge-qr-"))
-        self._qr_tmp_path = tmp_dir / "pair.png"
-        qr.render_qr(payload, self._qr_tmp_path)
-        self._qr_picture.set_filename(str(self._qr_tmp_path))
         self._pin_label.set_label(qr.pin_text(payload))
+        self._remove_qr()
+        try:
+            self._qr_tmp_path = Path(tempfile.mkdtemp(prefix="phonebridge-qr-")) / "pair.png"
+            qr.render_qr(payload, self._qr_tmp_path)
+            self._qr_picture.set_filename(str(self._qr_tmp_path))
+        except Exception as exc:  # noqa: BLE001 - no qrcode package, no temp space: pairing by PIN still works
+            log.warning("could not draw the pairing QR code: %s", exc)
+            self._qr_picture.set_filename(None)
         self._timer_label.set_label(f"This code refreshes in {self._pending.seconds_left()} s")
         wifi_pairing.active_pairing = {"name": self._pending.pc_name, "port": wifi_pairing.PAIR_PORT}
 
@@ -234,6 +242,11 @@ class PairingWindow(Adw.Window):
         if usb_link.adb_path():
             threading.Thread(target=usb_link.remove_reverse, args=(wifi_pairing.PAIR_PORT,), daemon=True).start()
         wifi_pairing.active_pairing = None
-        if self._qr_tmp_path and self._qr_tmp_path.exists():
-            self._qr_tmp_path.unlink(missing_ok=True)
+        self._remove_qr()
         return False
+
+    def _remove_qr(self) -> None:
+        """Deletes the code's picture (it holds the PIN) together with the folder made for it."""
+        if self._qr_tmp_path is not None:
+            shutil.rmtree(self._qr_tmp_path.parent, ignore_errors=True)
+            self._qr_tmp_path = None

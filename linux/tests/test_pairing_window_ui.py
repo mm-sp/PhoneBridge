@@ -19,8 +19,15 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib  # noqa: E402
 
-from phonebridge import pairing, tls_identity, wifi_pairing  # noqa: E402
+from phonebridge import pairing, qr, tls_identity, wifi_pairing  # noqa: E402
 from phonebridge.ui.pairing_window import PairingWindow  # noqa: E402
+
+tempfile.tempdir = str(tmp / "temp")   # the dialog's own temporary files, counted below
+Path(tempfile.tempdir).mkdir()
+
+
+def qr_dirs() -> list:
+    return sorted(Path(tempfile.tempdir).glob("phonebridge-qr-*"))
 
 PASS = FAIL = 0
 
@@ -109,8 +116,24 @@ def main():
             check("the displayed PIN changed with it", pin1 != pin2 and p.token in pin2.replace(" ", ""))
             check("the expired code can no longer pair anyone", p1.is_spent())
             check("the new code is fresh", not p.is_spent())
+            check("only the current code's picture is on disk", qr_dirs() == [win._qr_tmp_path.parent]
+                  and win._qr_tmp_path.is_file())
             during_handshake(win)
-            win.close(); app.quit()
+            real_render = qr.render_qr
+
+            def no_qrcode(*_a):
+                raise ImportError("No module named 'qrcode'")
+
+            qr.render_qr = no_qrcode
+            try:
+                win._start_pairing()
+                check("without a QR code the dialog still offers the PIN", win._pin_label.get_label() == win._pending.token)
+            finally:
+                qr.render_qr = real_render
+            win._start_pairing()
+            win.close()
+            check("closing the dialog leaves no picture or folder behind", qr_dirs() == [])
+            app.quit()
             return False
 
         GLib.timeout_add(250, poll)
