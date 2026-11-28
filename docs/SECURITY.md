@@ -67,7 +67,7 @@ Findings in the surrounding code, and what was done:
 | 8 | Android MMS `requestId` path traversal | low | **Fixed** (letters/digits only) |
 | 9 | Phone-chosen file names auto-opened on the PC | low | **Fixed** (only inert types open automatically; others need a click) |
 | 10 | Rotated-away phone identity key honoured forever | low | **Fixed** (7-day grace period) |
-| 11 | Smaller: secrets files briefly world-readable; USB tunnel throttle (loopback) lets a local user cut off the USB phone; huge `size` overflow; docker ids starting with `-` | low | **Fixed** (0600 from creation; loopback exempt from throttle; overflow-safe check; id validation). **Not changed:** `device.info_request` and `relay.config` skip the phone's permission gate (metadata only; TLS pinning still holds); `remove_stale_pairings` removes any pairing with the same phone name (needs the user to approve a new pairing first). |
+| 11 | Smaller: secrets files briefly world-readable; USB tunnel throttle (loopback) lets a local user cut off the USB phone; huge `size` overflow; docker ids starting with `-` | low | **Fixed** (0600 from creation; loopback exempt from throttle; overflow-safe check; id validation). **Not changed:** `device.info_request` and `relay.config` skip the phone's permission gate (metadata only; TLS pinning still holds); `remove_stale_pairings` removes any pairing with the same phone name (only after the user has approved a new pairing and it has completed). |
 | 12 | "Join phone hotspot from this PC" ran `nmcli … password <PW>`: the Wi-Fi password was visible in `ps` to every local user, and the process was never reaped | low | **Fixed** (`wifi_join.py`: profile created over NetworkManager's D-Bus API, activated with `nmcli connection up id`; `tests/test_wifi_join.py`, including a real NetworkManager round trip. Joining a real access point was **not** exercised) |
 | 13 | A PC app killed while the phone panel was powered off left the phone dark until the app was started again | low | **Fixed** (detached watchdog, `screensync/display_watchdog.py`; hardware, author-reported: panel back 1.4 s after `kill -9`; `tests/test_display_watchdog.py`) |
 
@@ -91,7 +91,10 @@ Regression tests for all of these: `tests/test_audit_fixes.py` (31), `test_udp_v
   forge a device or decrypt past traffic, but a stolen key plus an attacker who can reach the port can make the PC spend CPU
   on handshakes (rate-limited; and only LAN/USB sources are accepted).
 * **Phone-side "ask":** shown as a notification; with notifications disabled for PhoneBridge the request times out as *deny*.
-  On connect the PC's GUI asks for messages, calls and screen state, so a fresh connection can raise several prompts at once.
+  On connect the PC's GUI asks for messages, calls and contacts, so a fresh connection can raise several prompts at once.
+  **Deny** also stops what the phone would send by itself (new texts, call state, call history), and so does refusing the
+  **Ask** prompt, for that connection. While an Ask is unanswered those pushes go on, as do notifications and clipboard
+  text.
 * **Local log trust anchor:** the plain local ledger detects edits, deletions and reordering; replacing a whole log with a new
   valid chain is only caught if you enable the optional anchoring (`anchor.json`).
 * **Android 8–9** cannot speak TLS 1.3 and are refused unless `PHONEBRIDGE_ALLOW_TLS12=1`. Android lint also lists

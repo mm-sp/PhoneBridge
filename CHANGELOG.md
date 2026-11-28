@@ -1,6 +1,26 @@
 # Changelog
 
 ## 1.5.0 - unreleased
+- Android privacy: tapping Deny on an "Ask" prompt (messages, calls, notifications, clipboard) now also stops the phone sending that data by itself until the PC disconnects.
+- Android: pairing with another PC while connected now switches to it at once (the phone used to stay linked to the old PC while showing the new one as paired).
+- Android: a notification reply typed on the PC that cannot be delivered (the notification is gone) is now reported instead of looking sent.
+- Screen sync: when no picture arrives, the error repeats what the phone said it was waiting for.
+- A file or photo the phone cannot read (deleted meanwhile, no permission) is shown as failed on the PC instead of staying "Requesting from phone…", and opening it in the mounted phone folder fails at once instead of after 15 minutes.
+- Android: the app no longer crashes when something finishes after the connection service has stopped (a picture message's delivery result, the call log refresh after a call).
+- "Use PC audio" for a call now says when the PC could not switch the phone to the headset profile instead of claiming the audio is on the PC, and a failed switch back is retried.
+- The Pair dialog no longer leaves a temporary folder with a QR picture behind for every code it shows, and still offers the PIN when the QR code cannot be drawn.
+- Android: while PC control is off, waiting for approval on the PC, or a feature is unavailable (the terminal), the PC tabs show why instead of staying on "Loading…" or "Starting…", and reload once you allow it on the PC.
+- Android privacy: with "Messages (read)" set to Deny the phone no longer sends new texts or picture-message senders to the PC (nor the conversation after the PC sends a text), and with "Calls and contacts" set to Deny no incoming caller, call state or the call history it used to send after every call.
+- PC: the "Calling…" banner goes away if the phone never reports the call (missing phone permission, no signal, or calls switched off for the PC); a sent text is marked as sent also when the phone doesn't show the PC the conversation.
+- Android: cancelling mirroring (or losing the PC) while Android's "Start now" prompt is open now cancels that prompt, so tapping it later no longer starts capturing the screen; an earlier prompt's timer can no longer close the next one.
+- Android: a camera that cannot be queried is reported to the PC instead of crashing the app; a screen or app stream that fails to start leaves nothing running; a broken video connection is explained on the PC.
+- Pairing a phone again no longer removes its working pairing unless the new one completes (cancelled on the phone, connection lost).
+- A phone that reconnects while the PC app is still starting is no longer left connected but shown as "not connected" with its messages ignored: the PC accepts phones only once the app is ready.
+- Relay address: an address or port that cannot work is explained instead of reported as "turned on", and a bad saved or `PHONEBRIDGE_RELAY` setting no longer stops the app from starting.
+- Screen sync: stopping mirroring, losing the link or tapping "Turn screen on" just after the phone screen went off no longer disables automatic screen-off until the PC app restarts, or leaves the PC showing the screen as off when it is on.
+- Screen sync: if the phone screen cannot be turned back on (ADB unreachable) the PC says so and keeps retrying at the next opportunity, instead of reporting it restored; after a restart it restores the phone that was actually turned off; when the stream cannot be checked, the message names the missing phone permission.
+- Asking for a phone file again after a reconnect: ending the abandoned attempt no longer fails the new request in the mounted phone folder or stops the file from opening after it downloads.
+- Android: two different files with the same name finishing at the same moment are saved side by side (they could be mixed into one), and a save that fails no longer leaves a cut-off file in Download.
 - Transferring the same file twice at the same time (a double click, or sending it again while it is still going) could save a damaged copy that was reported as complete; each transfer now writes its own partial file, on the PC and on the phone.
 - The Security page is up to date when opened with no phone connected (newly paired devices, events, who is connected) and follows a phone connecting or disconnecting while it is open.
 - Connecting a different phone no longer leaves the previous phone's conversations, open message and draft, call history, contacts, photos, file listing and apps on the PC's tabs (a reply typed there could be sent from the new phone to the old phone's contact).
