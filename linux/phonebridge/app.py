@@ -41,14 +41,21 @@ class PhoneBridgeApp(Adw.Application):
         self._register_icons()
         self._start_security_engine()
         self.net_thread.start()
-        self.net_thread.run_coro(self.server.start()).result(timeout=10)
-        self.net_thread.run_coro(self.server.serve_forever())
 
         win = MainWindow(app, self.server, self.net_thread)
         self._wire_server_events(win)
         # The phone app's "control this PC" tabs (mouse, keyboard, screen, files, ports…).
         self.pc_control = PcControl(self.server, self.net_thread.loop, clipboard_text=win.current_clipboard_text)
         self.pc_control.approval_callback = self._ask_pc_control
+
+        # Listen only now that everything is wired: a phone that got in earlier would be missed by the window (shown as
+        # not connected, its messages dropped).
+        try:
+            self.net_thread.run_coro(self.server.start()).result(timeout=10)
+        except Exception:
+            win.destroy()   # no half-started app left running without a window
+            raise
+        self.net_thread.run_coro(self.server.serve_forever())
 
         show_page = Gio.SimpleAction.new("show-page", GLib.VariantType.new("s"))
         show_page.connect("activate", lambda _a, key: win.show_page_from_notification(key.get_string()))
